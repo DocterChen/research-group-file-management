@@ -6,20 +6,27 @@
 
 ## 功能特性
 
-- 统一成果模型：`ResearchOutput` 覆盖文章、专利、软著、会议成果、项目材料与数据代码类型。
-- 文章专属字段：支持文章类型、期刊、DOI、PMID、分区、投稿状态等元数据。
-- 成员与项目管理：本地维护成员与项目实体，成果可关联负责人、参与人和项目。
-- 权限与审核流：支持 `pi` / `admin` / `member` / `readonly` 角色与 `draft -> submitted -> approved` 闭环。
-- JSON 本地存储：默认写入 `data/local/` 下的多实体文件，并带 `schema_version`。
-- 统计与导出：支持成果汇总统计和 CSV 导出。
-- 回归测试：覆盖模型校验、权限规则、审核流、CLI 主路径与导出行为。
+- **统一成果模型**：`ResearchOutput` 覆盖文章、专利、软著、会议成果、项目材料与数据代码类型。
+- **文章专属字段**：支持文章类型、期刊、DOI、PMID、分区、投稿状态等元数据。
+- **成员与项目管理**：本地维护成员与项目实体，成果可关联负责人、参与人和项目。
+- **权限与审核流**：支持 `pi` / `admin` / `member` / `readonly` 角色与 `draft -> submitted -> approved` 闭环。
+- **完整Web UI管理**：成员、项目、成果的添加、编辑、删除全流程操作，支持表单验证和引用完整性检查。
+- **Excel高级导出**：生成格式化的Excel报告，包含汇总统计、成果清单、成员清单、项目清单四个工作表。
+- **外部数据抓取**：通过DOI（CrossRef）和PubMed自动填充文章元数据。
+- **全面中文化**：所有界面文本使用简体中文，包括登录页、仪表盘、表单和错误提示。
+- **JSON 本地存储**：默认写入 `data/local/` 下的多实体文件，并带 `schema_version`。
+- **统计与导出**：支持成果汇总统计和 CSV/Excel 导出。
+- **回归测试**：覆盖模型校验、权限规则、审核流、CLI 主路径与导出行为。
 
 ## 快速开始
 
 ### 环境要求
 
 - Python 3.9+
-- 无强制第三方运行时依赖
+- 推荐依赖（功能增强）：
+  - `openpyxl`：Excel高级格式导出
+  - `requests`：外部数据库抓取（DOI、PubMed）
+  - `PyJWT`：JWT认证支持（可选）
 
 ### 运行 CLI
 
@@ -102,6 +109,14 @@ PYTHONPATH=src python3 -m lab_literature_manager.cli \
 PYTHONPATH=src python3 -m lab_literature_manager.cli \
   --data-dir /tmp/research-output-demo \
   export csv --output /tmp/research-output-demo/outputs.csv
+```
+
+导出Excel报告（包含格式化和多工作表）：
+
+```bash
+PYTHONPATH=src python3 -m lab_literature_manager.cli \
+  --data-dir /tmp/research-output-demo \
+  export excel --output /tmp/research-output-demo/report.xlsx
 ```
 
 ### 运行 Web UI

@@ -6,31 +6,56 @@
 
 ### Added（新增）
 
-- 新增本地浏览器 UI：提供登录页、工作台仪表盘、成员/项目/成果列表、成果详情页与提交/审核操作。
-- 新增本地认证存储与会话机制：支持首次启动创建管理员账号，并通过 HTTP cookie 保持登录状态。
-- 新增 `litman web serve` 入口，允许直接从 CLI 启动浏览器界面。
-- 新增 `AGENTS.md` 交互偏好：默认优先 UI / 可视化交付，并在复杂任务中遵循 `awesome-code` 协作规范。
+- **完整Web UI管理界面**：实现成员、项目、成果的完整CRUD操作（添加、编辑、删除）
+  - 成员管理：添加/编辑/删除成员，支持角色选择和邮箱配置
+  - 项目管理：添加/编辑/删除项目，支持多负责人选择和资助来源
+  - 成果管理：添加/编辑/删除成果，支持文章类型动态表单
+  - 引用完整性检查：删除前自动检查成员/项目是否被成果引用
+  - 表单验证和友好错误提示
 
-- 新增科研成果管理 MVP：统一 `ResearchOutput`、`Member`、`Project`、`ReviewRecord`、`AuditLog` 数据模型，覆盖文章、专利、软著、会议成果、项目材料和数据代码类型。
-- 新增角色权限与审核流：支持 `pi` / `admin` / `member` / `readonly` 角色，落地 `draft -> submitted -> approved` 审核闭环。
-- 新增本地多实体 JSON 存储：默认在 `data/local/` 下维护 `members.json`、`projects.json`、`outputs.json`、`reviews.json` 和 `audit_logs.json`。
-- 新增 CLI 命令组：`members`、`projects`、`outputs`、`stats summary`、`export csv`。
-- 新增产品文档 `docs/product/REQUIREMENTS.md`、`docs/product/PERMISSION_MATRIX.md`、`docs/product/ENTITY_FIELDS.md`。
-- 新增科研成果回归测试 `tests/test_research_manager.py`，覆盖模型、权限、审核流、导出和 CLI 主路径。
-- 新增多实体虚构示例 `examples/research_outputs.sample.json`。
+- **Excel高级格式导出**：使用openpyxl实现专业Excel报告
+  - 汇总统计工作表：基础统计、类型分布、状态分布
+  - 成果清单工作表：包含所有成果字段、样式格式化、自动筛选
+  - 成员清单工作表：完整成员信息
+  - 项目清单工作表：项目详情和资助信息
+  - CLI命令：`export excel --output <path>`
+  - Web UI导出：仪表盘”导出Excel”按钮
+
+- **外部数据自动抓取**：支持DOI和PubMed数据库
+  - DOI抓取：通过CrossRef API自动填充文章信息（标题、作者、期刊、年份等）
+  - PubMed抓取：通过NCBI E-utilities API获取文章元数据
+  - 新增模块：`src/lab_literature_manager/data_fetcher.py`
+  - 支持命令行和编程接口调用
+
+- **全面中文化**：所有界面文本改为简体中文
+  - 登录页面、设置页面完全中文化
+  - 仪表盘、成员、项目、成果页面中文化
+  - 表单标签、按钮、错误提示中文化
+  - 图表标题和统计标签中文化
+
+- **Repository层完整CRUD方法**：
+  - `update_member()`, `delete_member()`: 成员更新和删除
+  - `update_project()`, `delete_project()`: 项目更新和删除
+  - `update_output()`, `delete_output()`: 成果更新和删除（带权限检查）
+  - 引用完整性检查：防止删除被引用的成员/项目
+
+- 更新 `AGENTS.md` 代码优化规则：明确要求使用awesome-code规范、自主决策、确保程序完美运行
+- 新增依赖：openpyxl（Excel导出）、PyJWT（认证增强）、requests（数据抓取）
 
 ### Changed（变更）
 
-- 将项目定位从“文献管理 CLI 原型”升级为“课题组科研成果与相关文件管理 CLI MVP”。
-- 调整 `.gitignore`，允许提交 `tests/` 回归测试目录，便于 GitHub 发布时保留测试资产。
-- 重写 [README.md](/Users/chenhang/Documents/Codex/文献管理/README.md) 快速开始、目录结构和数据边界说明，使其匹配新的成果管理工作流。
-- 更新 [docs/plans/PROJECT_ROADMAP.md](/Users/chenhang/Documents/Codex/文献管理/docs/plans/PROJECT_ROADMAP.md)，将路线图改为围绕统一成果模型、权限、附件和 Web 迁移展开。
-- 包版本从 `0.2.0` 提升为 `0.3.0`。
+- Web UI导航标签全部中文化：Dashboard→仪表盘、Members→成员管理、Projects→项目管理、Outputs→成果管理
+- 成员、项目、成果列表页面添加”添加”按钮，方便快速创建
+- 仪表盘添加”导出Excel”按钮，一键生成完整报告
+- CLI导出命令提示信息改为中文
+- 优化表单样式，统一使用项目设计系统
 
 ### Fixed（修复）
 
-- 修复旧版单一文献模型无法表达项目、角色权限、审核记录和跨成果类型管理的问题。
-- 修复旧版 CLI 只能处理 `add` / `list` / `show` 文献命令，无法支持科研成果提交流程的问题。
+- 修复Excel导出中Project模型缺少notes字段导致的AttributeError
+- 修复Web UI中缺少ArticleMetadata导入的bug
+- 修复表单提交后的重定向逻辑
+- 修复删除操作的权限检查
 
 ## [1.0.0] - 2026-06-23
 
