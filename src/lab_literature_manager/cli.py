@@ -36,6 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
     export_subparsers = export_parser.add_subparsers(dest="export_command")
     export_csv = export_subparsers.add_parser("csv", help="Export outputs to CSV.")
     export_csv.add_argument("--output", required=True, help="Destination CSV path.")
+    export_excel = export_subparsers.add_parser("excel", help="Export all data to Excel with formatting.")
+    export_excel.add_argument("--output", required=True, help="Destination Excel (.xlsx) path.")
 
     web_parser = subparsers.add_parser("web", help="Run the local browser UI.")
     web_subparsers = web_parser.add_subparsers(dest="web_command")
@@ -378,8 +380,19 @@ def _handle_stats(args: argparse.Namespace, repository: ResearchRepository, pars
 def _handle_export(args: argparse.Namespace, repository: ResearchRepository, parser: argparse.ArgumentParser) -> int:
     if args.export_command == "csv":
         output_path = repository.export_outputs_csv(args.output)
-        print(f"Exported CSV: {output_path}")
+        print(f"已导出CSV: {output_path}")
         return 0
+    elif args.export_command == "excel":
+        try:
+            from .excel_export import export_to_excel
+            export_to_excel(repository, args.output)
+            print(f"已导出Excel: {args.output}")
+            print("包含工作表: 汇总统计、成果清单、成员清单、项目清单")
+            return 0
+        except ImportError:
+            print("错误: 需要安装 openpyxl")
+            print("请运行: pip install openpyxl")
+            return 1
     parser.error("Please choose an export subcommand.")
     return 2
 
