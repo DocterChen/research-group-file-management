@@ -2,7 +2,7 @@
 
 课题组科研成果与相关文件管理程序，用于集中管理文章、专利、软著、会议成果、项目材料以及后续可扩展的数据/代码支撑文件。
 
-当前版本是本地 Python CLI MVP，重点验证统一成果模型、成员/项目关系、权限判断、审核流、统计汇总和 CSV 导出。它适合作为课题组内部业务模型原型，后续可继续演进到 Web 系统。
+当前版本提供本地 Python CLI 与浏览器 UI 两种入口，重点验证统一成果模型、成员/项目关系、权限判断、审核流、统计汇总、CSV 导出与可视化管理台。它适合作为课题组内部业务模型原型。
 
 ## 功能特性
 
@@ -104,10 +104,26 @@ PYTHONPATH=src python3 -m lab_literature_manager.cli \
   export csv --output /tmp/research-output-demo/outputs.csv
 ```
 
+### 运行 Web UI
+
+启动本地浏览器界面：
+
+```bash
+PYTHONPATH=src python3 -m lab_literature_manager.cli web serve
+```
+
+默认会在 `http://127.0.0.1:8080` 提供登录页，首次启动时会自动创建一个本地管理员账号：
+
+- 用户名：`admin`
+- 密码：`ChangeMe123`
+
+登录后可查看仪表盘、成员、项目、成果列表和单条成果详情，并在页面上提交/审核成果。
+
 ### 运行测试
 
 ```bash
 python3 -m unittest tests/test_research_manager.py
+python3 -m unittest tests.test_web_ui
 python3 -m json.tool examples/research_outputs.sample.json >/dev/null
 ```
 

@@ -14,6 +14,7 @@ from .models import (
 )
 from .permissions import can_perform
 from .repository import ResearchRepository
+from .web import LocalAuthStore, create_web_server
 
 __all__ = [
     "ArticleMetadata",
@@ -27,6 +28,8 @@ __all__ = [
     "ReviewRecord",
     "ReviewStatus",
     "Role",
+    "LocalAuthStore",
+    "create_web_server",
     "can_perform",
 ]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

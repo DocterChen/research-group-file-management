@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 from typing import List, Optional
 
+from pathlib import Path
 from .constants import DEFAULT_DATA_DIR
 from .models import ArticleMetadata, Member, OutputType, Project, ResearchOutput, ReviewStatus, Role
 from .repository import ResearchRepository
+from .web import LocalAuthStore, create_web_server
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,6 +36,17 @@ def build_parser() -> argparse.ArgumentParser:
     export_subparsers = export_parser.add_subparsers(dest="export_command")
     export_csv = export_subparsers.add_parser("csv", help="Export outputs to CSV.")
     export_csv.add_argument("--output", required=True, help="Destination CSV path.")
+
+    web_parser = subparsers.add_parser("web", help="Run the local browser UI.")
+    web_subparsers = web_parser.add_subparsers(dest="web_command")
+    serve_parser = web_subparsers.add_parser("serve", help="Start the web server.")
+    serve_parser.add_argument("--host", default="127.0.0.1", help="Bind host.")
+    serve_parser.add_argument("--port", type=int, default=8080, help="Bind port.")
+    serve_parser.add_argument(
+        "--auth-file",
+        default=str(Path(DEFAULT_DATA_DIR) / "web_auth.json"),
+        help="Path to the local auth store.",
+    )
     return parser
 
 
@@ -172,6 +185,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return _handle_stats(args, repository, parser)
         if args.command == "export":
             return _handle_export(args, repository, parser)
+        if args.command == "web":
+            return _handle_web(args, parser)
     except (KeyError, PermissionError, ValueError) as exc:
         parser.exit(status=1, message=f"Error: {exc}\n")
 
@@ -367,6 +382,26 @@ def _handle_export(args: argparse.Namespace, repository: ResearchRepository, par
         return 0
     parser.error("Please choose an export subcommand.")
     return 2
+
+
+def _handle_web(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.web_command != "serve":
+        parser.error("Please choose a web subcommand.")
+        return 2
+    auth_store = LocalAuthStore(args.auth_file)
+    if not auth_store.has_users():
+        auth_store.create_user("admin", "ChangeMe123", display_name="Administrator", role=Role.ADMIN)
+    server = create_web_server(data_dir=args.data_dir, auth_path=args.auth_file, host=args.host, port=args.port)
+    host, port = server.server_address
+    print(f"Web UI listening on http://{host}:{port}")
+    print("Default admin: admin / ChangeMe123")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
 
 
 if __name__ == "__main__":
