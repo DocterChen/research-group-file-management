@@ -1,0 +1,112 @@
+{
+  "members": {
+    "schema_version": 1,
+    "items": [
+      {
+        "member_id": "alice",
+        "name": "Alice Zhang",
+        "role": "member",
+        "email": "alice@example.org",
+        "notes": "虚构示例成员。"
+      },
+      {
+        "member_id": "pi-1",
+        "name": "Prof. Li",
+        "role": "pi",
+        "email": "pi@example.org",
+        "notes": "虚构示例 PI。"
+      }
+    ]
+  },
+  "projects": {
+    "schema_version": 1,
+    "items": [
+      {
+        "project_id": "proj-2026-gut",
+        "name": "Gut Microbiome Cohort",
+        "project_type": "funding",
+        "owner_member_ids": ["alice"],
+        "funding_source": "NSFC",
+        "start_year": 2026,
+        "end_year": null
+      }
+    ]
+  },
+  "outputs": {
+    "schema_version": 1,
+    "items": [
+      {
+        "output_id": "article-001",
+        "title": "Gut Microbiome Atlas for Clinical Research",
+        "output_type": "article",
+        "owner_member_ids": ["alice"],
+        "participant_member_ids": [],
+        "project_ids": ["proj-2026-gut"],
+        "year": 2026,
+        "keywords": ["gut", "microbiome"],
+        "summary": "虚构示例成果，用于演示统一成果模型。",
+        "notes": "不要在示例文件中放入真实课题组资料。",
+        "review_status": "approved",
+        "article": {
+          "article_type": "review",
+          "journal": "Journal of Example Translational Medicine",
+          "doi": "10.0000/example.2026.001",
+          "issn": "",
+          "pmid": "",
+          "publication_year": 2026,
+          "volume": "",
+          "issue": "",
+          "pages": "",
+          "impact_factor": "",
+          "jcr_quartile": "Q1",
+          "cas_quartile": "1区",
+          "submission_status": "accepted",
+          "first_authors": ["Alice Zhang"],
+          "corresponding_authors": ["Prof. Li"]
+        },
+        "created_at": "2026-06-23T00:00:00+00:00",
+        "updated_at": "2026-06-23T00:10:00+00:00"
+      }
+    ]
+  },
+  "reviews": {
+    "schema_version": 1,
+    "items": [
+      {
+        "review_id": "article-001-1",
+        "output_id": "article-001",
+        "actor_member_id": "alice",
+        "actor_role": "member",
+        "from_status": "draft",
+        "to_status": "submitted",
+        "comment": "Submitted for review.",
+        "created_at": "2026-06-23T00:05:00+00:00"
+      },
+      {
+        "review_id": "article-001-2",
+        "output_id": "article-001",
+        "actor_member_id": "pi-1",
+        "actor_role": "pi",
+        "from_status": "submitted",
+        "to_status": "approved",
+        "comment": "Approved.",
+        "created_at": "2026-06-23T00:10:00+00:00"
+      }
+    ]
+  },
+  "audit_logs": {
+    "schema_version": 1,
+    "items": [
+      {
+        "log_id": "output-article-001-1",
+        "entity_type": "output",
+        "entity_id": "article-001",
+        "action": "create",
+        "actor_member_id": "alice",
+        "actor_role": "member",
+        "summary": "Created research output 'Gut Microbiome Atlas for Clinical Research'.",
+        "created_at": "2026-06-23T00:00:00+00:00"
+      }
+    ]
+  }
+}

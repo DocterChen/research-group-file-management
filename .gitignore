@@ -1,0 +1,79 @@
+# .gitignore - 自动生成
+
+# ========================================注意========================================
+# 此文件由 init-project 自动生成，包含共性设置和项目特定规则。
+# 如需添加自定义规则，请在文件末尾的「自定义规则」部分添加。
+# ===================================================================================
+
+# === 共性设置（所有项目通用）===
+
+.DS_Store
+.idea/
+.vscode/
+*.log
+*.tmp
+.env
+.env.local
+*.pem
+*.key
+secrets/
+# 项目测试目录需要提交到版本控制，不忽略 /tests/
+/plans/
+/reviews/
+/suggestions/
+/tmp/run_*/
+.auto-test-code-run.json
+.awesome-code/
+.bensz-api/
+/.bensz-api/
+.bensz-skills/
+.bensz-skills-backup/
+.check-review-alignment/
+.compact-bensz-skills/
+.download-fulltext-pdf/
+.draw-plot/
+.dudu-optimize-prompt/
+.explain-figures/
+.explain-results/
+.find-best-skill/
+.git-pr-review/
+.install-bensz-skills/
+.make-research-plan/
+.md-to-word/
+.mirror/
+.nsfc-reviewers/
+.nsfc-roadmap/
+.nsfc-schematic/
+.paper-explain-figures/
+.paper-know-journal/
+.paper-select-journal/
+.paper-write-sci/
+.parallel-vibe/
+.parallel_vibe/
+.write-paper-sci/
+
+# === 自定义规则（在下方添加项目特定的忽略规则）===
+
+# 文献管理项目：本地数据、全文、附件、导出与个人历史默认不提交
+.Rhistory
+.RData
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+data/local/
+pdfs/
+attachments/
+exports/
+imports/raw/
+*.pdf
+*.ris.tmp
+*.bib.tmp
+
+# 示例：
+# local-config.yml
+# *.backup
