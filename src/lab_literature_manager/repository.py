@@ -57,6 +57,43 @@ class ResearchRepository:
         members.append(member)
         self._save_entities("members", members, sort_key=lambda item: item.member_id.lower())
 
+    def update_member(self, member: Member) -> None:
+        members = self.list_members()
+        if not any(existing.member_id == member.member_id for existing in members):
+            raise KeyError(f"Member not found: {member.member_id}")
+        updated_members = [member if existing.member_id == member.member_id else existing for existing in members]
+        self._save_entities("members", updated_members, sort_key=lambda item: item.member_id.lower())
+
+    def delete_member(self, member_id: str) -> None:
+        normalized_id = member_id.strip()
+        members = self.list_members()
+        if not any(existing.member_id == normalized_id for existing in members):
+            raise KeyError(f"Member not found: {member_id}")
+        # Check if member is referenced in outputs
+        outputs = self.list_outputs()
+        referenced_in = [
+            output.output_id
+            for output in outputs
+            if normalized_id in output.owner_member_ids or normalized_id in output.participant_member_ids
+        ]
+        if referenced_in:
+            raise ValueError(
+                f"Cannot delete member {member_id}: referenced in outputs {', '.join(referenced_in[:5])}"
+                + (f" and {len(referenced_in) - 5} more" if len(referenced_in) > 5 else "")
+            )
+        # Check if member is referenced in projects
+        projects = self.list_projects()
+        referenced_projects = [
+            project.project_id for project in projects if normalized_id in project.owner_member_ids
+        ]
+        if referenced_projects:
+            raise ValueError(
+                f"Cannot delete member {member_id}: referenced in projects {', '.join(referenced_projects[:5])}"
+                + (f" and {len(referenced_projects) - 5} more" if len(referenced_projects) > 5 else "")
+            )
+        updated_members = [existing for existing in members if existing.member_id != normalized_id]
+        self._save_entities("members", updated_members, sort_key=lambda item: item.member_id.lower())
+
     def list_projects(self) -> List[Project]:
         return self._load_entities("projects", Project.from_dict, sort_key=lambda item: item.project_id.lower())
 
@@ -74,6 +111,30 @@ class ResearchRepository:
         self._validate_member_ids(project.owner_member_ids, label="project owners")
         projects.append(project)
         self._save_entities("projects", projects, sort_key=lambda item: item.project_id.lower())
+
+    def update_project(self, project: Project) -> None:
+        projects = self.list_projects()
+        if not any(existing.project_id == project.project_id for existing in projects):
+            raise KeyError(f"Project not found: {project.project_id}")
+        self._validate_member_ids(project.owner_member_ids, label="project owners")
+        updated_projects = [project if existing.project_id == project.project_id else existing for existing in projects]
+        self._save_entities("projects", updated_projects, sort_key=lambda item: item.project_id.lower())
+
+    def delete_project(self, project_id: str) -> None:
+        normalized_id = project_id.strip()
+        projects = self.list_projects()
+        if not any(existing.project_id == normalized_id for existing in projects):
+            raise KeyError(f"Project not found: {project_id}")
+        # Check if project is referenced in outputs
+        outputs = self.list_outputs()
+        referenced_in = [output.output_id for output in outputs if normalized_id in output.project_ids]
+        if referenced_in:
+            raise ValueError(
+                f"Cannot delete project {project_id}: referenced in outputs {', '.join(referenced_in[:5])}"
+                + (f" and {len(referenced_in) - 5} more" if len(referenced_in) > 5 else "")
+            )
+        updated_projects = [existing for existing in projects if existing.project_id != normalized_id]
+        self._save_entities("projects", updated_projects, sort_key=lambda item: item.project_id.lower())
 
     def list_outputs(
         self,
@@ -124,6 +185,53 @@ class ResearchRepository:
             actor_member_id=actor_member_id,
             actor_role=actor_role,
             summary=f"Created research output '{output.title}'.",
+        )
+
+    def update_output(self, output: ResearchOutput, *, actor_role: Role, actor_member_id: str) -> None:
+        ensure_permission(
+            actor_role,
+            Permission.EDIT,
+            output=output,
+            actor_member_id=actor_member_id,
+            action_label="update output",
+        )
+        outputs = self.list_outputs()
+        if not any(existing.output_id == output.output_id for existing in outputs):
+            raise KeyError(f"Research output not found: {output.output_id}")
+        self._validate_member_ids(output.owner_member_ids, label="output owners")
+        self._validate_member_ids(output.participant_member_ids, label="output participants")
+        self._validate_project_ids(output.project_ids)
+        updated_outputs = [output if existing.output_id == output.output_id else existing for existing in outputs]
+        self._save_entities("outputs", updated_outputs, sort_key=lambda item: item.output_id.lower())
+        self._append_audit_log(
+            entity_type="output",
+            entity_id=output.output_id,
+            action="update",
+            actor_member_id=actor_member_id,
+            actor_role=actor_role,
+            summary=f"Updated research output '{output.title}'.",
+        )
+
+    def delete_output(self, output_id: str, *, actor_role: Role, actor_member_id: str) -> None:
+        normalized_id = output_id.strip()
+        output = self.get_output(normalized_id)
+        ensure_permission(
+            actor_role,
+            Permission.DELETE,
+            output=output,
+            actor_member_id=actor_member_id,
+            action_label="delete output",
+        )
+        outputs = self.list_outputs()
+        updated_outputs = [existing for existing in outputs if existing.output_id != normalized_id]
+        self._save_entities("outputs", updated_outputs, sort_key=lambda item: item.output_id.lower())
+        self._append_audit_log(
+            entity_type="output",
+            entity_id=output_id,
+            action="delete",
+            actor_member_id=actor_member_id,
+            actor_role=actor_role,
+            summary=f"Deleted research output '{output.title}'.",
         )
 
     def submit_output(self, output_id: str, *, actor_role: Role, actor_member_id: str) -> ResearchOutput:
