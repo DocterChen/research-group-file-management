@@ -22,6 +22,7 @@ secrets/
 /reviews/
 /suggestions/
 /tmp/run_*/
+tmp/
 .auto-test-code-run.json
 .awesome-code/
 .bensz-api/
