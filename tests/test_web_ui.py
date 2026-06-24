@@ -60,6 +60,7 @@ class WebUiTests(TestCase):
             self.assertIn("马老师课题组", login_html)
             self.assertIn("姓名", login_html)
             self.assertIn("密码", login_html)
+            self.assertIn("验证码", login_html)
             self.assertIn("/register", login_html)
             self.assertNotIn("普通成员", login_html)
             self.assertNotIn("PI / 管理员", login_html)
@@ -75,6 +76,23 @@ class WebUiTests(TestCase):
             self.assertIn("论文", dashboard)
             self.assertIn("导出Excel", dashboard)
 
+    def test_login_captcha_validation_and_setup_page_are_generic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app = self._build_app(tmp_dir)
+            setup_html = WebApplication(data_dir=Path(tmp_dir) / "fresh-data", auth_path=Path(tmp_dir) / "fresh-auth" / "web_auth.json").render_setup_page()
+            self.assertIn("组织名称", setup_html)
+            self.assertIn("工作台副标题", setup_html)
+
+            login_html = app.render_login_page()
+            self.assertIn("captcha_token", login_html)
+
+            challenge = app.issue_login_captcha()
+            self.assertIsNone(app.authenticate_with_captcha("admin", "ChangeMe123", challenge.token, "0000"))
+
+            challenge = app.issue_login_captcha()
+            user = app.authenticate_with_captcha("admin", "ChangeMe123", challenge.token, challenge.answer)
+            self.assertIsNotNone(user)
+
     def test_output_detail_includes_actions_and_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             app = self._build_app(tmp_dir)
@@ -83,10 +101,12 @@ class WebUiTests(TestCase):
 
             detail = app.render_output_detail(admin, output)  # type: ignore[arg-type]
             self.assertIn("提交审核", detail)
+            self.assertIn("编辑", detail)
             self.assertIn("article-1", detail)
             self.assertIn("草稿", detail)
 
             submit_user = Mock(role=Role.MEMBER, member_id="alice")
+
             class FakeHandler:
                 def __init__(self, app):
                     self.app = app
@@ -100,11 +120,62 @@ class WebUiTests(TestCase):
             updated = app.repository.get_output("article-1")
             self.assertEqual(updated.review_status.value, "submitted")
 
+    def test_review_workbench_and_member_promotion_actions_render(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app = self._build_app(tmp_dir)
+            app.auth_store.create_user("alice", "MemberPass123", display_name="Alice Zhang", role=Role.MEMBER)
+            admin = app.auth_store.authenticate("admin", "ChangeMe123")
+            assert admin is not None
+
+            app.repository.submit_output("article-1", actor_role=Role.ADMIN, actor_member_id="admin")
+
+            review_html = app.render_review_workbench(admin)
+            self.assertIn("审核工作台", review_html)
+            self.assertIn("通过", review_html)
+            self.assertIn("退回", review_html)
+
+            member_html = app.render_member_detail(admin, app.repository.get_member("alice"))
+            self.assertIn("设为管理员", member_html)
+
+    def test_output_form_supports_save_draft_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app = self._build_app(tmp_dir)
+            admin = app.auth_store.authenticate("admin", "ChangeMe123")
+            assert admin is not None
+            form_html = app.render_output_form(admin)
+            self.assertIn("保存草稿", form_html)
+            self.assertIn("提交审核", form_html)
+
+            request = type(
+                "FakeHandler",
+                (),
+                {
+                    "__init__": lambda self, app: setattr(self, "app", app)
+                    or setattr(self, "send_response", Mock())
+                    or setattr(self, "send_header", Mock())
+                    or setattr(self, "end_headers", Mock()),
+                },
+            )(app)
+            fields = {
+                "output_id": "",
+                "title": "Draft Output",
+                "output_type": "article",
+                "year": "2026",
+                "article_type": "review",
+                "journal": "Journal A",
+                "submission_status": "writing",
+                "save_mode": "draft",
+            }
+            fields_multi = {"owner_member_ids": ["alice"], "participant_member_ids": [], "project_ids": []}
+            LocalWebRequestHandler._handle_output_add(request, admin, fields, fields_multi)  # type: ignore[arg-type]
+            created = app.repository.get_output("LW-2026-001")
+            self.assertEqual(created.review_status.value, "draft")
+
     def test_setup_page_is_shown_when_workspace_is_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             app = WebApplication(data_dir=Path(tmp_dir) / "data", auth_path=Path(tmp_dir) / "auth" / "web_auth.json")
             setup_html = app.render_setup_page()
-            self.assertIn("工作区名称", setup_html)
+            self.assertIn("组织名称", setup_html)
             app.save_settings(app.load_settings().__class__(workspace_name="马老师课题组"))
             self.assertIn("马老师课题组", app.render_login_page())
 
@@ -219,6 +290,22 @@ class WebUiTests(TestCase):
             approved = app.auth_store.approve_user(pending.username, approved_by="admin")
             self.assertEqual(approved.account_status, "active")
             self.assertIsNotNone(app.auth_store.authenticate("Li Ming", "MemberPass123"))
+
+    def test_members_page_exposes_admin_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app = self._build_app(tmp_dir)
+            app.auth_store.create_user("alice", "MemberPass123", display_name="Alice Zhang", role=Role.MEMBER)
+            admin = app.auth_store.authenticate("admin", "ChangeMe123")
+            assert admin is not None
+            members_html = app.render_members_page(admin)
+            self.assertIn("设为管理员", members_html)
+
+            app.promote_member_to_admin("alice", actor=admin)
+            promoted_member = app.repository.get_member("alice")
+            promoted_user = app.auth_store.get_user("alice")
+            self.assertEqual(promoted_member.role, Role.ADMIN)
+            self.assertIsNotNone(promoted_user)
+            self.assertEqual(promoted_user.role, Role.ADMIN)  # type: ignore[union-attr]
 
     def test_auth_store_creates_and_persists_users(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

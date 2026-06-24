@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import html
 import json
+import random
 import secrets
 import threading
 from collections import Counter
@@ -40,6 +41,8 @@ AUTH_SCHEMA_VERSION = 1
 SESSION_COOKIE_NAME = "litman_session"
 SESSION_TTL_HOURS = 8
 PASSWORD_ITERATIONS = 180_000
+CAPTCHA_TTL_MINUTES = 10
+CAPTCHA_DIGITS = 4
 ACCOUNT_STATUS_ACTIVE = "active"
 ACCOUNT_STATUS_PENDING = "pending"
 DEFAULT_WORKSPACE_NAME = "科研成果管理系统"
@@ -114,6 +117,46 @@ class WebUser:
 class SessionRecord:
     username: str
     expires_at: datetime
+
+
+@dataclass
+class CaptchaChallenge:
+    token: str
+    answer: str
+    expires_at: datetime
+
+
+class LoginCaptchaStore:
+    """In-memory login captcha registry."""
+
+    def __init__(self) -> None:
+        self._challenges: Dict[str, CaptchaChallenge] = {}
+        self._lock = threading.Lock()
+
+    def issue(self) -> CaptchaChallenge:
+        token = secrets.token_urlsafe(24)
+        answer = "".join(str(secrets.randbelow(10)) for _ in range(CAPTCHA_DIGITS))
+        challenge = CaptchaChallenge(
+            token=token,
+            answer=answer,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=CAPTCHA_TTL_MINUTES),
+        )
+        with self._lock:
+            self._challenges[token] = challenge
+        return challenge
+
+    def verify(self, token: str, answer: str) -> bool:
+        normalized_token = token.strip()
+        normalized_answer = answer.strip()
+        if not normalized_token or not normalized_answer:
+            return False
+        with self._lock:
+            challenge = self._challenges.pop(normalized_token, None)
+        if challenge is None:
+            return False
+        if challenge.expires_at <= datetime.now(timezone.utc):
+            return False
+        return hmac.compare_digest(challenge.answer, normalized_answer)
 
 
 class LocalAuthStore:
@@ -219,6 +262,16 @@ class LocalAuthStore:
             self._save_users(updated_users)
             return approved
 
+    def update_user(self, user: WebUser) -> WebUser:
+        normalized = user.username.strip()
+        with self._lock:
+            users = self.list_users()
+            if not any(item.username == normalized for item in users):
+                raise KeyError(f"User not found: {normalized}")
+            updated_users = [user if item.username == normalized else item for item in users]
+            self._save_users(updated_users)
+            return user
+
     def _load_payload(self) -> Dict[str, object]:
         if not self.path.exists():
             return {"schema_version": AUTH_SCHEMA_VERSION, "items": []}
@@ -298,6 +351,7 @@ class WebApplication:
         self.repository = ResearchRepository(data_dir)
         self.auth_store = LocalAuthStore(auth_path)
         self.sessions = SessionStore()
+        self.login_captchas = LoginCaptchaStore()
         self.settings_path = Path(data_dir) / WORKSPACE_SETTINGS_FILE
 
     def load_settings(self) -> WorkspaceSettings:
@@ -317,6 +371,32 @@ class WebApplication:
             json.dumps(settings.to_dict(), ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+
+    def issue_login_captcha(self) -> CaptchaChallenge:
+        return self.login_captchas.issue()
+
+    def authenticate_with_captcha(
+        self,
+        username: str,
+        password: str,
+        captcha_token: str,
+        captcha_answer: str,
+    ) -> Optional[WebUser]:
+        if not self.login_captchas.verify(captcha_token, captcha_answer):
+            return None
+        return self.auth_store.authenticate(username, password)
+
+    def promote_member_to_admin(self, member_id: str, *, actor: WebUser) -> Member:
+        if actor.role not in {Role.ADMIN, Role.PI}:
+            raise PermissionError("当前账号没有提权权限。")
+        member = self.repository.get_member(member_id)
+        updated_member = replace(member, role=Role.ADMIN)
+        self.repository.update_member(updated_member)
+        user = self.auth_store.get_user(member.member_id)
+        if user is not None:
+            promoted_user = replace(user, role=Role.ADMIN)
+            self.auth_store.update_user(promoted_user)
+        return updated_member
 
     def get_current_user(self, handler: BaseHTTPRequestHandler) -> Optional[WebUser]:
         token = self._get_cookie(handler, SESSION_COOKIE_NAME)
@@ -691,6 +771,26 @@ class WebApplication:
       font-size: 0.9rem;
       line-height: 1.5;
     }}
+    .captcha-panel {{
+      min-width: 132px;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(135deg, rgba(15,118,110,0.08), rgba(194,138,26,0.12)),
+        #fff;
+      padding: 12px 14px;
+      letter-spacing: 0.25em;
+      font-weight: 700;
+      color: var(--accent-strong);
+      user-select: none;
+      font-variant-numeric: tabular-nums;
+    }}
+    .captcha-digits {{
+      font-size: 1.1rem;
+    }}
     .login-panel {{
       padding: 34px;
     }}
@@ -908,7 +1008,8 @@ class WebApplication:
         if current_user.role in {Role.ADMIN, Role.PI}:
             links.insert(1, ("members", "/members", "成员管理"))
             links.insert(2, ("projects", "/projects", "项目管理"))
-            links.insert(2, ("accounts", "/accounts/pending", "账号审核"))
+            links.insert(2, ("reviews", "/reviews", "审核工作台"))
+            links.insert(3, ("accounts", "/accounts/pending", "账号审核"))
         items = []
         for section, href, label in links:
             active = " active" if active_section == section else ""
@@ -963,6 +1064,7 @@ class WebApplication:
     def render_login_page(self, error: str = "") -> str:
         error_html = f'<div class="notice">{html.escape(error)}</div>' if error else ""
         settings = self.load_settings()
+        challenge = self.issue_login_captcha()
         body = f"""
         <div class="login-shell">
           <section class="login-card compact">
@@ -984,6 +1086,17 @@ class WebApplication:
                 <div class="field">
                   <label for="password">密码</label>
                   <input id="password" name="password" type="password" autocomplete="current-password" required />
+                </div>
+                <input type="hidden" name="captcha_token" value="{html.escape(challenge.token)}" />
+                <div class="field">
+                  <label for="captcha_answer">验证码</label>
+                  <div class="split-field">
+                    <input id="captcha_answer" name="captcha_answer" inputmode="numeric" autocomplete="one-time-code" maxlength="{CAPTCHA_DIGITS}" required />
+                    <div class="captcha-panel" aria-label="验证码图形">
+                      <span class="captcha-digits">{html.escape(challenge.answer)}</span>
+                    </div>
+                  </div>
+                  <div class="inline-help">请输入右侧 4 位数字验证码。</div>
                 </div>
                 <div class="button-row">
                   <button class="button primary" type="submit">登录</button>
@@ -1044,12 +1157,12 @@ class WebApplication:
                 <div class="brand-mark"></div>
                 <div>
                   <h1>{html.escape(DEFAULT_WORKSPACE_NAME)}</h1>
-                  <p>成果管理与审核工作台</p>
+                  <p>成果管理与审核平台</p>
                 </div>
               </div>
-              <div class="login-badge">Workspace Setup</div>
+              <div class="login-badge">首次初始化</div>
               <h1>创建工作区和第一位管理员。</h1>
-              <p>首次进入时设置工作区名称并创建管理员账号，之后管理员和普通成员就可以按权限进入各自的工作区。</p>
+              <p>首次进入时设置组织名称、工作台副标题，并创建管理员账号，之后管理员和普通成员就可以按权限进入各自的工作区。</p>
               <div class="login-hero-panel">
                 <h3>建议</h3>
                 <p>管理员账号只用于工作区初始化，不建议与个人成员账号混用。</p>
@@ -1060,8 +1173,12 @@ class WebApplication:
               {error_html}
               <form method="post" action="/setup">
                 <div class="field">
-                  <label for="workspace_name">工作区名称</label>
+                  <label for="workspace_name">组织名称</label>
                   <input id="workspace_name" name="workspace_name" value="{html.escape(DEFAULT_WORKSPACE_NAME)}" placeholder="例如：马老师课题组、科研成果管理系统" required />
+                </div>
+                <div class="field">
+                  <label for="workspace_subtitle">工作台副标题</label>
+                  <input id="workspace_subtitle" name="workspace_subtitle" value="成果管理与审核工作台" placeholder="例如：成果管理与审核平台" required />
                 </div>
                 <div class="field">
                   <label for="username">管理员用户名</label>
@@ -1152,9 +1269,16 @@ class WebApplication:
             f"<td>{html.escape(member.name)}</td>"
             f"<td>{html.escape(role_label(member.role))}</td>"
             f"<td>{html.escape(member.email or '-')}</td>"
+            f"<td>"
+            + (
+                ""
+                if member.role == Role.ADMIN
+                else f'<form method="post" action="/members/{html.escape(member.member_id)}/promote" style="display:inline-block;"><button class="button secondary" type="submit">设为管理员</button></form>'
+            )
+            + f"</td>"
             f"</tr>"
             for member in members
-        ) or '<tr><td colspan="4" class="muted">暂无成员数据。</td></tr>'
+        ) or '<tr><td colspan="5" class="muted">暂无成员数据。</td></tr>'
         body = f"""
         <section class="stack">
           <div class="topbar">
@@ -1168,7 +1292,7 @@ class WebApplication:
           </div>
           <article class="card">
             <table class="table">
-              <thead><tr><th>编号</th><th>姓名</th><th>角色</th><th>邮箱</th></tr></thead>
+              <thead><tr><th>编号</th><th>姓名</th><th>角色</th><th>邮箱</th><th>操作</th></tr></thead>
               <tbody>{rows}</tbody>
             </table>
           </article>
@@ -1219,6 +1343,56 @@ class WebApplication:
         </section>
         """
         return self.render_layout("账号审核", body, active_section="accounts", current_user=current_user, notice=notice)
+
+    def render_review_workbench(self, current_user: WebUser, notice: str = "") -> str:
+        if current_user.role not in {Role.ADMIN, Role.PI}:
+            body = """
+            <section class="stack">
+              <div class="topbar"><div><h2>审核工作台</h2><div class="subtle">只有管理员和 PI 可以审核成果。</div></div></div>
+              <div class="empty-state">当前账号没有审核权限。</div>
+            </section>
+            """
+            return self.render_layout("审核工作台", body, active_section="reviews", current_user=current_user, notice=notice)
+
+        pending_outputs = self.repository.list_outputs(status=ReviewStatus.SUBMITTED)
+        rows = "".join(
+            f"<tr>"
+            f"<td><a href=\"/outputs/{html.escape(output.output_id)}\">{html.escape(output.output_id)}</a></td>"
+            f"<td>{html.escape(output.title)}</td>"
+            f"<td>{html.escape(output_type_label(output.output_type))}</td>"
+            f"<td>{self._status_badge(output.review_status)}</td>"
+            f"<td>"
+            f"<form method=\"post\" action=\"/outputs/{html.escape(output.output_id)}/approve\" style=\"display:inline-block;margin-right:8px;\"><input type=\"hidden\" name=\"comment\" value=\"通过Web审核\" /><button class=\"button primary\" type=\"submit\">通过</button></form>"
+            f"<form method=\"post\" action=\"/outputs/{html.escape(output.output_id)}/return\" style=\"display:inline-block;\"><input type=\"hidden\" name=\"comment\" value=\"退回补充材料\" /><button class=\"button secondary\" type=\"submit\">退回</button></form>"
+            f"</td>"
+            f"</tr>"
+            for output in pending_outputs
+        )
+        table = (
+            f"""
+            <table class="table">
+              <thead><tr><th>编号</th><th>标题</th><th>类型</th><th>状态</th><th>操作</th></tr></thead>
+              <tbody>{rows}</tbody>
+            </table>
+            """
+            if rows
+            else '<div class="empty-state">暂无待审核成果。</div>'
+        )
+        body = f"""
+        <section class="stack">
+          <div class="topbar">
+            <div>
+              <h2>审核工作台</h2>
+              <div class="subtle">集中处理已提交成果。</div>
+            </div>
+            <div class="button-row">
+              <a class="button secondary" href="/outputs">全部成果</a>
+            </div>
+          </div>
+          <article class="card">{table}</article>
+        </section>
+        """
+        return self.render_layout("审核工作台", body, active_section="reviews", current_user=current_user, notice=notice)
 
     def render_projects_page(self, current_user: WebUser) -> str:
         projects = self.repository.list_projects()
@@ -1350,7 +1524,10 @@ class WebApplication:
         actions = []
         if can_perform(current_user.role, Permission.EDIT, output=output, actor_member_id=current_user.member_id):
             actions.append(
-                f'<form method="post" action="/outputs/{html.escape(output.output_id)}/submit" style="display:inline-block;margin-right:10px;"><button class="button primary" type="submit">提交审核</button></form>'
+                f'<a class="button secondary" href="/outputs/{html.escape(output.output_id)}/edit">编辑</a>'
+            )
+            actions.append(
+                f'<form method="post" action="/outputs/{html.escape(output.output_id)}/submit" style="display:inline-block;"><button class="button primary" type="submit">提交审核</button></form>'
             )
         if can_perform(current_user.role, Permission.REVIEW, output=output, actor_member_id=current_user.member_id):
             actions.append(
@@ -1684,6 +1861,11 @@ class WebApplication:
         return self.render_layout(title, body, active_section="members", current_user=current_user)
 
     def render_member_detail(self, current_user: WebUser, member: Member, notice: str = "") -> str:
+        promote_button = ""
+        if current_user.role in {Role.ADMIN, Role.PI} and member.role != Role.ADMIN:
+            promote_button = (
+                f'<form method="post" action="/members/{html.escape(member.member_id)}/promote" style="display:inline-block;"><button class="button secondary" type="submit">设为管理员</button></form>'
+            )
         body = f"""
         <section class="stack">
           <div class="topbar">
@@ -1693,6 +1875,7 @@ class WebApplication:
             </div>
             <div class="button-row">
               <a class="button primary" href="/members/{html.escape(member.member_id)}/edit">编辑</a>
+              {promote_button}
               <form method="post" action="/members/{html.escape(member.member_id)}/delete" style="display:inline-block;" onsubmit="return confirm('确认删除成员 {html.escape(member.name)}？此操作不可恢复。');">
                 <button class="button secondary" type="submit">删除</button>
               </form>
@@ -1973,7 +2156,8 @@ class WebApplication:
               </div>
 
               <div class="button-row">
-                <button class="button primary" type="submit">{'保存' if is_edit else '添加'}</button>
+                <button class="button secondary" type="submit" formaction="{'/outputs/' + html.escape(output.output_id) + '/save' if is_edit else '/outputs/save'}" formnovalidate>保存草稿</button>
+                <button class="button primary" type="submit">{'提交修改' if is_edit else '提交审核'}</button>
                 <a class="button secondary" href="/outputs">取消</a>
               </div>
             </form>
@@ -2063,6 +2247,7 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             or path == "/projects"
             or path.startswith("/projects/")
             or path == "/accounts/pending"
+            or path == "/reviews"
         )
         if is_admin_area and user.role not in {Role.ADMIN, Role.PI}:
             self.send_error(403, "Forbidden")
@@ -2075,6 +2260,9 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/accounts/pending":
             self._send_html("Pending Accounts", self.app.render_pending_accounts_page(user))
+            return
+        if path == "/reviews":
+            self._send_html("Review Workbench", self.app.render_review_workbench(user))
             return
         if path.startswith("/members/") and path.endswith("/edit"):
             member_id = path[len("/members/") : -len("/edit")].strip("/")
@@ -2185,6 +2373,11 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 return
             username = fields.get("username", "")
             password = fields.get("password", "")
+            captcha_token = fields.get("captcha_token", "")
+            captcha_answer = fields.get("captcha_answer", "")
+            if not self.app.login_captchas.verify(captcha_token, captcha_answer):
+                self._send_html("登录", self.app.render_login_page("验证码错误。"), status=401)
+                return
             user = self.app.auth_store.authenticate(username, password)
             if user is None:
                 existing = self.app.auth_store.get_user(username)
@@ -2207,7 +2400,10 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 return
             try:
                 workspace_name = fields.get("workspace_name", "").strip() or DEFAULT_WORKSPACE_NAME
-                self.app.save_settings(WorkspaceSettings(workspace_name=workspace_name))
+                workspace_subtitle = fields.get("workspace_subtitle", "").strip() or "成果管理与审核工作台"
+                self.app.save_settings(
+                    WorkspaceSettings(workspace_name=workspace_name, workspace_subtitle=workspace_subtitle)
+                )
                 self.app.auth_store.create_user(
                     fields.get("username", ""),
                     fields.get("password", ""),
@@ -2252,6 +2448,7 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             or path in {"/members/add", "/projects/add"}
             or path.startswith("/projects/")
             or (path.startswith("/accounts/") and path.endswith("/approve"))
+            or (path.startswith("/members/") and path.endswith("/promote"))
         )
         if is_admin_mutation and user.role not in {Role.ADMIN, Role.PI}:
             self.send_error(403, "Forbidden")
@@ -2260,6 +2457,11 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
         if path.startswith("/accounts/") and path.endswith("/approve"):
             username = unquote(path[len("/accounts/") : -len("/approve")].strip("/"))
             self._handle_account_approve(user, username)
+            return
+
+        if path.startswith("/members/") and path.endswith("/promote"):
+            member_id = path[len("/members/") : -len("/promote")].strip("/")
+            self._handle_member_promote(user, member_id)
             return
 
         if path == "/members/add":
@@ -2289,12 +2491,19 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
         if path == "/outputs/add":
             self._handle_output_add(user, fields, fields_multi)
             return
+        if path == "/outputs/save":
+            self._handle_output_add(user, fields, fields_multi, save_mode="draft")
+            return
         if path == "/import/fetch":
             self._handle_import_fetch(user, fields, fields_multi)
             return
         if path.startswith("/outputs/") and path.endswith("/edit"):
             output_id = path[len("/outputs/") : -len("/edit")].strip("/")
-            self._handle_output_edit(user, output_id, fields, fields_multi)
+            self._handle_output_edit(user, output_id, fields, fields_multi, save_mode="submit")
+            return
+        if path.startswith("/outputs/") and path.endswith("/save"):
+            output_id = path[len("/outputs/") : -len("/save")].strip("/")
+            self._handle_output_edit(user, output_id, fields, fields_multi, save_mode="draft")
             return
         if path.startswith("/outputs/") and path.endswith("/delete"):
             output_id = path[len("/outputs/") : -len("/delete")].strip("/")
@@ -2308,6 +2517,10 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
         if path.startswith("/outputs/") and path.endswith("/approve"):
             output_id = path[len("/outputs/") : -len("/approve")].strip("/")
             self._handle_output_transition(user, output_id, "approve", comment=fields.get("comment", ""))
+            return
+        if path.startswith("/outputs/") and path.endswith("/return"):
+            output_id = path[len("/outputs/") : -len("/return")].strip("/")
+            self._handle_output_transition(user, output_id, "return", comment=fields.get("comment", ""))
             return
 
         self.send_error(404, "Not Found")
@@ -2359,6 +2572,19 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             self._send_html("Member Detail", self.app.render_member_detail(user, member, notice=str(exc)), status=400)
             return
         self.app.redirect(self, "/members")
+
+    def _handle_member_promote(self, user: WebUser, member_id: str) -> None:
+        try:
+            promoted = self.app.promote_member_to_admin(member_id, actor=user)
+        except (ValueError, KeyError, PermissionError) as exc:
+            try:
+                member = self.app.repository.get_member(member_id)
+            except KeyError:
+                self.send_error(404, "Not Found")
+                return
+            self._send_html("Member Detail", self.app.render_member_detail(user, member, notice=str(exc)), status=400)
+            return
+        self.app.redirect(self, f"/members/{promoted.member_id}")
 
     def _handle_account_approve(self, user: WebUser, username: str) -> None:
         if user.role not in {Role.ADMIN, Role.PI}:
@@ -2450,7 +2676,14 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             return
         self.app.redirect(self, "/projects")
 
-    def _handle_output_add(self, user: WebUser, fields: Dict[str, str], fields_multi: Dict[str, List[str]]) -> None:
+    def _handle_output_add(
+        self,
+        user: WebUser,
+        fields: Dict[str, str],
+        fields_multi: Dict[str, List[str]],
+        *,
+        save_mode: str = "submit",
+    ) -> None:
         try:
             owner_ids = self.app._merge_people_fields(fields_multi, "owner_member_ids", "owner_member_ids_manual")
             participant_ids = self.app._merge_people_fields(
@@ -2473,10 +2706,10 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             patent = None
             if output_type == OutputType.ARTICLE:
                 article_type = fields.get("article_type", "").strip()
-                if not article_type:
+                if not article_type and save_mode != "draft":
                     raise ValueError("论文成果必须填写文章类型。")
                 article = ArticleMetadata(
-                    article_type=article_type,
+                    article_type=article_type or "draft_record",
                     journal=fields.get("journal", "").strip(),
                     doi=fields.get("doi", "").strip(),
                     pmid=fields.get("pmid", "").strip(),
@@ -2506,10 +2739,14 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 notes=fields.get("notes", "").strip(),
                 article=article,
                 patent=patent,
+                review_status=ReviewStatus.DRAFT,
             )
             self.app.repository.add_output(output, actor_role=user.role, actor_member_id=user.member_id)
         except (ValueError, KeyError, PermissionError) as exc:
             self._send_html("Add Output", self.app.render_output_form(user, error=str(exc)), status=400)
+            return
+        if save_mode == "draft":
+            self.app.redirect(self, f"/outputs/{output.output_id}")
             return
         self.app.redirect(self, "/outputs")
 
@@ -2525,7 +2762,15 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             return
         self.app.redirect(self, f"/outputs/{output.output_id}")
 
-    def _handle_output_edit(self, user: WebUser, output_id: str, fields: Dict[str, str], fields_multi: Dict[str, List[str]]) -> None:
+    def _handle_output_edit(
+        self,
+        user: WebUser,
+        output_id: str,
+        fields: Dict[str, str],
+        fields_multi: Dict[str, List[str]],
+        *,
+        save_mode: str = "submit",
+    ) -> None:
         try:
             existing = self.app.repository.get_output(output_id)
             owner_ids = self.app._merge_people_fields(fields_multi, "owner_member_ids", "owner_member_ids_manual")
@@ -2575,7 +2820,7 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 keywords=keywords,
                 summary=fields.get("summary", "").strip(),
                 notes=fields.get("notes", "").strip(),
-                review_status=existing.review_status,
+                review_status=ReviewStatus.DRAFT if save_mode == "draft" else existing.review_status,
                 article=article,
                 patent=patent,
                 created_at=existing.created_at,
@@ -2588,6 +2833,9 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 self.send_error(404, "Not Found")
                 return
             self._send_html("Edit Output", self.app.render_output_form(user, existing, error=str(exc)), status=400)
+            return
+        if save_mode == "draft":
+            self.app.redirect(self, f"/outputs/{output_id}")
             return
         self.app.redirect(self, f"/outputs/{output_id}")
 
@@ -2614,6 +2862,13 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                     actor_role=user.role,
                     actor_member_id=user.member_id,
                     comment=comment or "Approved from web UI.",
+                )
+            elif action == "return":
+                self.app.repository.return_output(
+                    output_id,
+                    actor_role=user.role,
+                    actor_member_id=user.member_id,
+                    comment=comment or "Returned from web UI.",
                 )
             else:
                 raise ValueError(f"Unsupported action: {action}")

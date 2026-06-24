@@ -293,6 +293,31 @@ class ResearchRepository:
         )
         return updated
 
+    def return_output(
+        self,
+        output_id: str,
+        *,
+        actor_role: Role,
+        actor_member_id: str,
+        comment: str = "",
+    ) -> ResearchOutput:
+        output = self.get_output(output_id)
+        ensure_permission(
+            actor_role,
+            Permission.REVIEW,
+            output=output,
+            actor_member_id=actor_member_id,
+            action_label="return output",
+        )
+        updated = self._transition_output(
+            output,
+            ReviewStatus.RETURNED,
+            actor_member_id=actor_member_id,
+            actor_role=actor_role,
+            comment=comment or "Returned for revision.",
+        )
+        return updated
+
     def list_review_records(self, output_id: Optional[str] = None) -> List[ReviewRecord]:
         records = self._load_entities("reviews", ReviewRecord.from_dict, sort_key=lambda item: item.created_at)
         if output_id:
