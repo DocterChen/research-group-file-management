@@ -247,12 +247,13 @@ grep -A 3 "project_info:" config.yaml | grep "version"
 当判断用户意图与代码优化或修改相关时：
 
 - 允许多代理协作； 特别推荐使用 `awesome-code` skill 辅助规划与优化。
+- 若用户明确要求“全程按 awesome-code skill 的规范”或同等表述，必须先读取并执行 `awesome-code` skill，运行路径发现与协调门禁脚本，然后自主选择 single-pass、focused-agent、parallel 或 sequential 策略。
 - 发现的所有问题必须全部解决，不留已知缺陷
 - 如遇疑问或存在更优方案，自主决定最优方案执行，不中断工作流询问用户
 - 不得破坏已有功能，确保最终成品正常、稳定、高效地工作
 - 全程按 `awesome-code` skill 的规范执行复杂开发任务
 - 如果有问题或者更好的方案，自己决定，不要询问用户
-- 最后要保证程序完美运行
+- 最终交付前必须完成可运行验证；若环境限制导致某类验证无法执行，必须说明原因，并保证已执行验证范围内程序稳定运行。
 
 ## Codex 执行规则
 

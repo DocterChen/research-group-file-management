@@ -6,9 +6,9 @@
 
 - `output_id`：稳定成果 ID
 - `title`：成果标题
-- `output_type`：成果类型
-- `owner_member_ids`：负责人 ID 列表
-- `participant_member_ids`：参与人 ID 列表
+- `output_type`：成果类型，界面显示为中文；底层枚举保持英文值以兼容既有数据
+- `owner_member_ids`：负责人列表，可保存成员 ID，也可保存未建档成员或外部合作者姓名
+- `participant_member_ids`：参与人列表，可保存成员 ID，也可保存未建档成员或外部合作者姓名
 - `project_ids`：关联项目 ID 列表
 - `year`：成果年份
 - `keywords`：关键词
@@ -49,10 +49,15 @@
 - `project_id`
 - `name`
 - `project_type`
-- `owner_member_ids`
+- `owner_member_ids`：负责人列表，可保存成员 ID，也可保存未建档负责人姓名
 - `funding_source`
 - `start_year`
 - `end_year`
+
+## WorkspaceSettings
+
+- `workspace_name`：首次初始化时设置的工作区名称，例如“马老师课题组”
+- `workspace_subtitle`：工作台副标题，默认“成果管理与审核工作台”
 
 ## ReviewRecord
 
