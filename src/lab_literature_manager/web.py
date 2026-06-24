@@ -9,15 +9,16 @@ import html
 import json
 import secrets
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from .models import ArticleMetadata, Member, OutputType, Permission, Project, ResearchOutput, ReviewStatus, Role
+from .data_fetcher import fetch_article_metadata
+from .models import ArticleMetadata, Member, OutputType, PatentMetadata, Permission, Project, ResearchOutput, ReviewStatus, Role
 from .permissions import can_perform
 from .repository import ResearchRepository
 
@@ -25,6 +26,8 @@ AUTH_SCHEMA_VERSION = 1
 SESSION_COOKIE_NAME = "litman_session"
 SESSION_TTL_HOURS = 8
 PASSWORD_ITERATIONS = 180_000
+ACCOUNT_STATUS_ACTIVE = "active"
+ACCOUNT_STATUS_PENDING = "pending"
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,9 @@ class WebUser:
     role: Role
     member_id: str = ""
     created_at: str = ""
+    account_status: str = ACCOUNT_STATUS_ACTIVE
+    approved_by: str = ""
+    approved_at: str = ""
 
     def to_dict(self) -> Dict[str, str]:
         return {
@@ -46,6 +52,9 @@ class WebUser:
             "role": self.role.value,
             "member_id": self.member_id,
             "created_at": self.created_at,
+            "account_status": self.account_status,
+            "approved_by": self.approved_by,
+            "approved_at": self.approved_at,
         }
 
     @classmethod
@@ -58,6 +67,9 @@ class WebUser:
             role=Role(str(data.get("role", Role.MEMBER.value))),
             member_id=str(data.get("member_id", "")),
             created_at=str(data.get("created_at", "")),
+            account_status=str(data.get("account_status", ACCOUNT_STATUS_ACTIVE)),
+            approved_by=str(data.get("approved_by", "")),
+            approved_at=str(data.get("approved_at", "")),
         )
 
 
@@ -81,6 +93,9 @@ class LocalAuthStore:
         payload = self._load_payload()
         return [WebUser.from_dict(item) for item in payload.get("items", [])]
 
+    def list_pending_users(self) -> List[WebUser]:
+        return [user for user in self.list_users() if user.account_status == ACCOUNT_STATUS_PENDING]
+
     def get_user(self, username: str) -> Optional[WebUser]:
         normalized = username.strip()
         for user in self.list_users():
@@ -96,6 +111,7 @@ class LocalAuthStore:
         display_name: str,
         role: Role,
         member_id: str = "",
+        account_status: str = ACCOUNT_STATUS_ACTIVE,
     ) -> WebUser:
         normalized_username = username.strip()
         normalized_password = password.strip()
@@ -120,6 +136,7 @@ class LocalAuthStore:
                 role=role if isinstance(role, Role) else Role(str(role)),
                 member_id=member_id.strip() or normalized_username,
                 created_at=self._now_iso(),
+                account_status=account_status,
             )
             users.append(user)
             self._save_users(users)
@@ -129,12 +146,41 @@ class LocalAuthStore:
         user = self.get_user(username)
         if user is None:
             return None
+        if user.account_status != ACCOUNT_STATUS_ACTIVE:
+            return None
+        if self.is_password_valid(user, password):
+            return user
+        return None
+
+    def is_password_valid(self, user: WebUser, password: str) -> bool:
         salt = base64.b64decode(user.password_salt.encode("ascii"))
         expected = user.password_hash
         actual = self._hash_password(password, salt)
-        if hmac.compare_digest(expected, actual):
-            return user
-        return None
+        return hmac.compare_digest(expected, actual)
+
+    def approve_user(self, username: str, *, approved_by: str) -> WebUser:
+        normalized = username.strip()
+        if not normalized:
+            raise ValueError("Username must not be empty.")
+        with self._lock:
+            users = self.list_users()
+            updated_users: List[WebUser] = []
+            approved: Optional[WebUser] = None
+            for user in users:
+                if user.username == normalized:
+                    approved = replace(
+                        user,
+                        account_status=ACCOUNT_STATUS_ACTIVE,
+                        approved_by=approved_by.strip(),
+                        approved_at=self._now_iso(),
+                    )
+                    updated_users.append(approved)
+                else:
+                    updated_users.append(user)
+            if approved is None:
+                raise KeyError(f"User not found: {normalized}")
+            self._save_users(updated_users)
+            return approved
 
     def _load_payload(self) -> Dict[str, object]:
         if not self.path.exists():
@@ -239,9 +285,21 @@ class WebApplication:
         active_section: str = "",
         current_user: Optional[WebUser] = None,
         notice: str = "",
+        public_page: bool = False,
     ) -> str:
         nav = self._render_nav(active_section=active_section, current_user=current_user)
         notice_html = f'<div class="notice">{html.escape(notice)}</div>' if notice else ""
+        if public_page:
+            page_body = f"{notice_html}{body}"
+        else:
+            page_body = f"""
+  {notice_html}
+  <div class="shell">
+    {nav}
+    <main class="content">
+      {body}
+    </main>
+  </div>"""
         return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -487,6 +545,11 @@ class WebApplication:
       box-shadow: var(--shadow);
       overflow: hidden;
     }}
+    .login-card.compact {{
+      width: min(420px, 100%);
+      display: block;
+      border-radius: 22px;
+    }}
     .login-hero {{
       padding: 34px;
       background:
@@ -505,6 +568,36 @@ class WebApplication:
       max-width: 34ch;
       line-height: 1.6;
     }}
+    .login-badge {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.16);
+      font-size: 0.82rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }}
+    .login-hero-grid {{
+      display: grid;
+      gap: 16px;
+    }}
+    .login-hero-panel {{
+      padding: 16px;
+      border-radius: 20px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+    }}
+    .login-hero-panel h3 {{
+      margin: 0 0 8px;
+      font-size: 0.98rem;
+    }}
+    .login-hero-panel p {{
+      margin: 0;
+      max-width: none;
+    }}
     .login-stats {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -520,6 +613,26 @@ class WebApplication:
       display: block;
       font-size: 1.25rem;
       margin-bottom: 6px;
+    }}
+    .login-entry-list {{
+      display: grid;
+      gap: 12px;
+      margin-bottom: 22px;
+    }}
+    .login-entry {{
+      padding: 14px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: var(--panel-soft);
+    }}
+    .login-entry strong {{
+      display: block;
+      margin-bottom: 4px;
+    }}
+    .login-entry span {{
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.5;
     }}
     .login-panel {{
       padding: 34px;
@@ -575,6 +688,55 @@ class WebApplication:
       border-color: var(--line);
       color: var(--text);
     }}
+    .button.ghost {{
+      background: transparent;
+      border-color: var(--line);
+      color: var(--text);
+    }}
+    .split-field {{
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: end;
+    }}
+    .inline-help {{
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }}
+    .section-banner {{
+      display: grid;
+      gap: 6px;
+      margin-bottom: 18px;
+    }}
+    .section-banner h2, .section-banner h3 {{
+      margin: 0;
+    }}
+    .section-banner p {{
+      margin: 0;
+      color: var(--muted);
+    }}
+    .workflow-grid {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }}
+    .workflow-card {{
+      padding: 16px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.82);
+      border: 1px solid var(--line);
+    }}
+    .workflow-card strong {{
+      display: block;
+      margin-bottom: 6px;
+    }}
+    .workflow-card span {{
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }}
     .stack {{
       display: grid;
       gap: 14px;
@@ -594,6 +756,17 @@ class WebApplication:
       display: grid;
       grid-template-columns: 1.2fr 0.8fr;
       gap: 18px;
+    }}
+    .form-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }}
+    .form-grid .field {{
+      margin-bottom: 0;
+    }}
+    .form-grid .span-2 {{
+      grid-column: 1 / -1;
     }}
     .kv {{
       display: grid;
@@ -621,23 +794,41 @@ class WebApplication:
       color: var(--text);
       font-size: 0.84rem;
     }}
+    .source-card {{
+      padding: 14px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: var(--panel-soft);
+    }}
+    .source-card h3 {{
+      margin: 0 0 10px;
+      font-size: 1rem;
+    }}
+    .source-card p {{
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }}
+    .empty-state {{
+      padding: 22px;
+      border-radius: 18px;
+      border: 1px dashed var(--line);
+      color: var(--muted);
+      background: rgba(255,255,255,0.62);
+    }}
     @media (max-width: 1080px) {{
       .shell {{ grid-template-columns: 1fr; }}
       .sidebar {{ border-right: none; border-bottom: 1px solid var(--line); }}
-      .cards, .panels, .detail-grid, .login-card {{ grid-template-columns: 1fr; }}
+      .cards, .panels, .detail-grid, .login-card, .workflow-grid, .form-grid {{ grid-template-columns: 1fr; }}
       .bar-row {{ grid-template-columns: 1fr; }}
       .content {{ padding: 18px; }}
+      .split-field {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
 <body>
-  {notice_html}
-  <div class="shell">
-    {nav}
-    <main class="content">
-      {body}
-    </main>
-  </div>
+  {page_body}
 </body>
 </html>"""
 
@@ -653,6 +844,8 @@ class WebApplication:
             ("outputs", "/outputs", "成果管理"),
             ("logout", "/logout", "退出登录"),
         ]
+        if current_user.role in {Role.ADMIN, Role.PI}:
+            links.insert(2, ("accounts", "/accounts/pending", "账号审核"))
         items = []
         for section, href, label in links:
             active = " active" if active_section == section else ""
@@ -706,34 +899,23 @@ class WebApplication:
 
     def render_login_page(self, error: str = "") -> str:
         error_html = f'<div class="notice">{html.escape(error)}</div>' if error else ""
-        return f"""
+        body = f"""
         <div class="login-shell">
-          <section class="login-card">
-            <div class="login-hero">
-              <div class="brand" style="margin-bottom: 30px;">
+          <section class="login-card compact">
+            <div class="login-panel">
+              <div class="brand" style="margin-bottom: 24px;">
                 <div class="brand-mark"></div>
                 <div>
                   <h1>课题组科研成果管理系统</h1>
                   <p>成果管理与审核工作台</p>
                 </div>
               </div>
-              <h1>让课题组成果管理回到一个清晰的页面里。</h1>
-              <p>登录后可以查看成员、项目和成果状态，直接提交与审核，所有数据都保存在本地 JSON 工作区里。</p>
-              <div class="login-stats">
-                <div class="login-stat"><strong>登录</strong><span>本地账号认证</span></div>
-                <div class="login-stat"><strong>仪表盘</strong><span>可视化图表</span></div>
-                <div class="login-stat"><strong>工作流</strong><span>提交与审核闭环</span></div>
-                <div class="login-stat"><strong>文件</strong><span>JSON 持久化</span></div>
-              </div>
-            </div>
-            <div class="login-panel">
               <h2 style="margin:0 0 10px;">登录</h2>
-              <p class="muted" style="margin-top:0;">使用本地工作区账号登录</p>
               {error_html}
               <form method="post" action="/login">
                 <div class="field">
-                  <label for="username">用户名</label>
-                  <input id="username" name="username" autocomplete="username" required />
+                  <label for="username">姓名</label>
+                  <input id="username" name="username" autocomplete="name" required />
                 </div>
                 <div class="field">
                   <label for="password">密码</label>
@@ -741,16 +923,55 @@ class WebApplication:
                 </div>
                 <div class="button-row">
                   <button class="button primary" type="submit">登录</button>
+                  <a class="button secondary" href="/register">注册</a>
                 </div>
               </form>
             </div>
           </section>
         </div>
         """
+        return self.render_layout("登录", body, public_page=True)
+
+    def render_register_page(self, error: str = "", notice: str = "") -> str:
+        error_html = f'<div class="notice">{html.escape(error)}</div>' if error else ""
+        notice_html = f'<div class="notice">{html.escape(notice)}</div>' if notice else ""
+        body = f"""
+        <div class="login-shell">
+          <section class="login-card compact">
+            <div class="login-panel">
+              <div class="brand" style="margin-bottom: 24px;">
+                <div class="brand-mark"></div>
+                <div>
+                  <h1>课题组科研成果管理系统</h1>
+                  <p>新账号需要管理员审核</p>
+                </div>
+              </div>
+              <h2 style="margin:0 0 10px;">注册</h2>
+              {notice_html}
+              {error_html}
+              <form method="post" action="/register">
+                <div class="field">
+                  <label for="display_name">姓名</label>
+                  <input id="display_name" name="display_name" autocomplete="name" required />
+                </div>
+                <div class="field">
+                  <label for="password">密码</label>
+                  <input id="password" name="password" type="password" autocomplete="new-password" required />
+                </div>
+                <div class="button-row">
+                  <button class="button primary" type="submit">提交注册</button>
+                  <a class="button secondary" href="/login">返回登录</a>
+                </div>
+              </form>
+            </div>
+          </section>
+        </div>
+        """
+        return self.render_layout("注册", body, public_page=True)
 
     def render_setup_page(self, error: str = "") -> str:
         error_html = f'<div class="notice">{html.escape(error)}</div>' if error else ""
-        return f"""
+        body = f"""
         <div class="login-shell">
           <section class="login-card">
             <div class="login-hero">
@@ -761,8 +982,13 @@ class WebApplication:
                   <p>成果管理与审核工作台</p>
                 </div>
               </div>
-              <h1>创建工作区访问权限</h1>
-              <p>首次进入时先创建一个管理员账号，之后就可以登录并开始维护成员、项目和成果数据。</p>
+              <div class="login-badge">Workspace Setup</div>
+              <h1>创建实验室工作区的第一位管理员。</h1>
+              <p>首次进入时先创建一个管理员账号，之后 PI、管理员和普通成员就可以按权限进入各自的工作区。</p>
+              <div class="login-hero-panel">
+                <h3>建议</h3>
+                <p>管理员账号只用于工作区初始化，不建议与个人成员账号混用。</p>
+              </div>
             </div>
             <div class="login-panel">
               <h2 style="margin:0 0 10px;">工作区设置</h2>
@@ -788,6 +1014,7 @@ class WebApplication:
           </section>
         </div>
         """
+        return self.render_layout("工作区设置", body, public_page=True)
 
     def render_dashboard(self, current_user: WebUser) -> str:
         summary = self.repository.build_summary()
@@ -881,6 +1108,50 @@ class WebApplication:
         """
         return self.render_layout("成员管理", body, active_section="members", current_user=current_user)
 
+    def render_pending_accounts_page(self, current_user: WebUser, notice: str = "") -> str:
+        if current_user.role not in {Role.ADMIN, Role.PI}:
+            body = """
+            <section class="stack">
+              <div class="topbar"><div><h2>账号审核</h2><div class="subtle">只有管理员和 PI 可以审核注册申请。</div></div></div>
+              <div class="empty-state">当前账号没有审核权限。</div>
+            </section>
+            """
+            return self.render_layout("账号审核", body, active_section="accounts", current_user=current_user, notice=notice)
+
+        pending_users = self.auth_store.list_pending_users()
+        rows = "".join(
+            f"<tr>"
+            f"<td>{html.escape(user.display_name)}</td>"
+            f"<td>{html.escape(user.username)}</td>"
+            f"<td>{html.escape(user.created_at or '-')}</td>"
+            f"<td><form method=\"post\" action=\"/accounts/{html.escape(quote(user.username, safe=''))}/approve\" style=\"display:inline-block;\">"
+            f"<button class=\"button primary\" type=\"submit\">通过</button></form></td>"
+            f"</tr>"
+            for user in pending_users
+        )
+        table = (
+            f"""
+            <table class="table">
+              <thead><tr><th>姓名</th><th>账号</th><th>注册时间</th><th>操作</th></tr></thead>
+              <tbody>{rows}</tbody>
+            </table>
+            """
+            if rows
+            else '<div class="empty-state">暂无待审核账号。</div>'
+        )
+        body = f"""
+        <section class="stack">
+          <div class="topbar">
+            <div>
+              <h2>账号审核</h2>
+              <div class="subtle">审核通过后，注册者可用姓名和密码登录。</div>
+            </div>
+          </div>
+          <article class="card">{table}</article>
+        </section>
+        """
+        return self.render_layout("账号审核", body, active_section="accounts", current_user=current_user, notice=notice)
+
     def render_projects_page(self, current_user: WebUser) -> str:
         projects = self.repository.list_projects()
         rows = "".join(
@@ -946,6 +1217,59 @@ class WebApplication:
         """
         return self.render_layout("成果管理", body, active_section="outputs", current_user=current_user)
 
+    def render_import_page(self, current_user: WebUser, error: str = "") -> str:
+        error_html = f'<div class="notice">{html.escape(error)}</div>' if error else ""
+        body = f"""
+        <section class="stack">
+          <div class="section-banner">
+            <h2>外部数据抓取</h2>
+            <p>输入 DOI、PubMed ID 或专利号，自动预填成果字段。抓取失败时仍可手动继续编辑。</p>
+          </div>
+          {error_html}
+          <div class="workflow-grid">
+            <article class="workflow-card"><strong>DOI / CrossRef</strong><span>自动填充标题、作者、期刊、年份和摘要。</span></article>
+            <article class="workflow-card"><strong>PubMed / E-utilities</strong><span>适合医学文献，可自动抓取 PMID 对应的文章元数据。</span></article>
+            <article class="workflow-card"><strong>专利 / 公开数据源</strong><span>按专利号或申请号检索，预填专利标题、申请信息和权利人。</span></article>
+          </div>
+          <article class="card">
+            <form method="post" action="/import/fetch" class="stack">
+              <div class="form-grid">
+                <div class="field span-2">
+                  <label for="source_type">抓取类型</label>
+                  <select id="source_type" name="source_type" required style="width:100%;padding:12px 14px;border-radius:14px;border:1px solid var(--line);">
+                    <option value="doi">DOI / CrossRef</option>
+                    <option value="pmid">PubMed / PMID</option>
+                    <option value="patent">专利号 / 申请号</option>
+                  </select>
+                </div>
+                <div class="field span-2">
+                  <label for="query">检索值</label>
+                  <input id="query" name="query" required value="10.3390/biom12060824" placeholder="例如 10.3390/biom12060824、38902948 或 CN202410000000.0" />
+                  <div class="inline-help">系统会尝试把结果预填到成果编辑页；如果没有命中，也可以直接回到表单手动填写。</div>
+                </div>
+                <div class="field span-2">
+                  <label for="title">成果标题（可选）</label>
+                  <input id="title" name="title" placeholder="不填则使用抓取到的标题" />
+                </div>
+                <div class="field">
+                  <label for="output_id">成果编号</label>
+                  <input id="output_id" name="output_id" placeholder="不填则自动生成" />
+                </div>
+                <div class="field">
+                  <label for="owner_member_id">负责人编号</label>
+                  <input id="owner_member_id" name="owner_member_id" value="{html.escape(current_user.member_id)}" required />
+                </div>
+              </div>
+              <div class="button-row">
+                <button class="button primary" type="submit">抓取并预填</button>
+                <a class="button secondary" href="/outputs/add">直接手动录入</a>
+              </div>
+            </form>
+          </article>
+        </section>
+        """
+        return self.render_layout("外部数据抓取", body, active_section="outputs", current_user=current_user)
+
     def render_output_detail(self, current_user: WebUser, output: ResearchOutput, notice: str = "") -> str:
         actions = []
         if can_perform(current_user.role, Permission.EDIT, output=output, actor_member_id=current_user.member_id):
@@ -954,7 +1278,7 @@ class WebApplication:
             )
         if can_perform(current_user.role, Permission.REVIEW, output=output, actor_member_id=current_user.member_id):
             actions.append(
-                f'<form method="post" action="/outputs/{html.escape(output.output_id)}/approve" style="display:inline-block;"><input type="hidden" name="comment" value="通过Web界面审核通过" /><button class="button secondary" type="submit">批准</button></form>'
+                f'<form method="post" action="/outputs/{html.escape(output.output_id)}/approve" style="display:inline-block;"><input type="hidden" name="comment" value="通过Web界面审核通过" /><button class="button secondary" type="submit">通过审核</button></form>'
             )
         body = f"""
         <section class="stack">
@@ -1011,6 +1335,95 @@ class WebApplication:
             return "login", self.render_login_page()
         return "setup", self.render_setup_page()
 
+    def _normalise_output_id(self, value: str, source_type: str) -> str:
+        trimmed = value.strip()
+        if trimmed:
+            return trimmed
+        prefix = {"doi": "doi", "pmid": "pmid", "patent": "patent"}.get(source_type, "output")
+        return f"{prefix}-{secrets.token_hex(4)}"
+
+    def _build_output_from_fetch(self, fields: Dict[str, str], current_user: WebUser) -> ResearchOutput:
+        source_type = fields.get("source_type", "").strip()
+        query = fields.get("query", "").strip()
+        if source_type == "doi":
+            article_data = fetch_article_metadata(doi=query)
+            if article_data is None:
+                raise ValueError("未能通过 DOI 抓取到文章信息。")
+            article = ArticleMetadata(
+                article_type="research_article",
+                journal=article_data.journal or "",
+                doi=article_data.doi or query,
+                pmid=article_data.pmid or "",
+                publication_year=article_data.year,
+                first_authors=article_data.authors[:3],
+            )
+            return ResearchOutput(
+                output_id=self._normalise_output_id(fields.get("output_id", ""), source_type),
+                title=fields.get("title", "").strip() or article_data.title or query,
+                output_type=OutputType.ARTICLE,
+                owner_member_ids=[fields.get("owner_member_id", "").strip() or current_user.member_id],
+                year=article_data.year,
+                summary=article_data.abstract or "",
+                article=article,
+            )
+        if source_type == "pmid":
+            article_data = fetch_article_metadata(pmid=query)
+            if article_data is None:
+                raise ValueError("未能通过 PubMed PMID 抓取到文章信息。")
+            article = ArticleMetadata(
+                article_type="research_article",
+                journal=article_data.journal or "",
+                doi=article_data.doi or "",
+                pmid=article_data.pmid or query,
+                publication_year=article_data.year,
+                first_authors=article_data.authors[:3],
+            )
+            return ResearchOutput(
+                output_id=self._normalise_output_id(fields.get("output_id", ""), source_type),
+                title=fields.get("title", "").strip() or article_data.title or query,
+                output_type=OutputType.ARTICLE,
+                owner_member_ids=[fields.get("owner_member_id", "").strip() or current_user.member_id],
+                year=article_data.year,
+                summary=article_data.abstract or "",
+                article=article,
+            )
+        if source_type == "patent":
+            patent_data = self._fetch_patent_metadata(query)
+            if patent_data is None:
+                raise ValueError("未能通过专利号抓取到专利信息。")
+            patent = PatentMetadata(
+                patent_number=patent_data.patent_number,
+                application_number=patent_data.application_number,
+                title=patent_data.title,
+                country_code=patent_data.country_code,
+                kind_code=patent_data.kind_code,
+                inventors=patent_data.inventors,
+                assignees=patent_data.applicants,
+                application_date=patent_data.filing_date or "",
+                publication_date=patent_data.publication_date or "",
+                status=patent_data.status or "",
+                abstract=patent_data.abstract or "",
+                url=patent_data.url or "",
+            )
+            return ResearchOutput(
+                output_id=self._normalise_output_id(fields.get("output_id", ""), source_type),
+                title=fields.get("title", "").strip() or patent.title or query,
+                output_type=OutputType.PATENT,
+                owner_member_ids=[fields.get("owner_member_id", "").strip() or current_user.member_id],
+                summary=patent.abstract,
+                patent=patent,
+            )
+        raise ValueError("请选择有效的抓取类型。")
+
+    def _fetch_patent_metadata(self, query: str) -> Optional[object]:
+        from .data_fetcher import DataFetcher
+
+        fetcher = DataFetcher()
+        return fetcher.fetch_patent_by_number(query)
+
+    def _apply_fetched_output(self, output: ResearchOutput) -> ResearchOutput:
+        return output
+
     def _metric_card(self, label: str, value: str, hint: str) -> str:
         return f"""
         <article class="card">
@@ -1062,6 +1475,17 @@ class WebApplication:
                   <div><span>期刊</span><span>{html.escape(output.article.journal or '-')}</span></div>
                   <div><span>DOI</span><span>{html.escape(output.article.doi or '-')}</span></div>
                   <div><span>投稿状态</span><span>{html.escape(output.article.submission_status or '-')}</span></div>
+                </div>
+                """
+            )
+        if output.patent:
+            chunks.append(
+                f"""
+                <div class="kv">
+                  <div><span>专利号</span><span>{html.escape(output.patent.patent_number or '-')}</span></div>
+                  <div><span>申请号</span><span>{html.escape(output.patent.application_number or '-')}</span></div>
+                  <div><span>国家/地区</span><span>{html.escape(output.patent.country_code or '-')}</span></div>
+                  <div><span>状态</span><span>{html.escape(output.patent.status or '-')}</span></div>
                 </div>
                 """
             )
@@ -1262,14 +1686,10 @@ class WebApplication:
             else '<input id="output_id" name="output_id" required />'
         )
         error_html = f'<div class="notice">{html.escape(error)}</div>' if error else ""
-
-        # Output type options
         output_type_options = "".join(
             f'<option value="{ot.value}"{" selected" if output and output.output_type == ot else ""}>{html.escape(ot.value)}</option>'
             for ot in OutputType
         )
-
-        # Members for checkboxes
         members = self.repository.list_members()
         owner_checkboxes = "".join(
             f'<label style="display:flex;gap:8px;padding:8px;"><input type="checkbox" name="owner_member_ids" value="{html.escape(m.member_id)}"{" checked" if output and m.member_id in output.owner_member_ids else ""} /><span>{html.escape(m.name)} ({html.escape(m.member_id)})</span></label>'
@@ -1279,18 +1699,15 @@ class WebApplication:
             f'<label style="display:flex;gap:8px;padding:8px;"><input type="checkbox" name="participant_member_ids" value="{html.escape(m.member_id)}"{" checked" if output and m.member_id in output.participant_member_ids else ""} /><span>{html.escape(m.name)} ({html.escape(m.member_id)})</span></label>'
             for m in members
         )
-
-        # Projects for checkboxes
         projects = self.repository.list_projects()
         project_checkboxes = "".join(
             f'<label style="display:flex;gap:8px;padding:8px;"><input type="checkbox" name="project_ids" value="{html.escape(p.project_id)}"{" checked" if output and p.project_id in output.project_ids else ""} /><span>{html.escape(p.name)} ({html.escape(p.project_id)})</span></label>'
             for p in projects
         )
-
-        # Article fields (shown/hidden based on output type)
         article_display = 'style="display:block;"' if output and output.output_type == OutputType.ARTICLE else 'style="display:none;"'
+        patent_display = 'style="display:block;"' if output and output.output_type == OutputType.PATENT else 'style="display:none;"'
         article = output.article if output and output.article else None
-
+        patent = output.patent if output and output.patent else None
         body = f"""
         <section class="stack">
           <div class="topbar">
@@ -1298,82 +1715,119 @@ class WebApplication:
               <h2>{title}</h2>
               <div class="subtle">{'修改成果信息' if is_edit else '添加新成果记录'}</div>
             </div>
+            <div class="button-row">
+              <a class="button ghost" href="/import">从 DOI / PubMed / 专利抓取</a>
+            </div>
           </div>
           <article class="card">
             {error_html}
             <form method="post" action="{action}" class="stack">
-              <div class="field">
-                <label for="output_id">成果编号 *</label>
-                {output_id_field}
-              </div>
-              <div class="field">
-                <label for="title">成果标题 *</label>
-                <input id="title" name="title" value="{html.escape(output.title) if output else ''}" required />
-              </div>
-              <div class="field">
-                <label for="output_type">成果类型 *</label>
-                <select id="output_type" name="output_type" required style="width:100%;padding:12px 14px;border-radius:14px;border:1px solid var(--line);" onchange="toggleArticleFields(this.value)">{output_type_options}</select>
-              </div>
-              <div class="field">
-                <label for="year">年份</label>
-                <input id="year" name="year" type="number" min="1900" max="2100" value="{output.year if output and output.year else ''}" />
-              </div>
-              <div class="field">
-                <label>负责人 *</label>
-                <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
-                  {owner_checkboxes if owner_checkboxes else '<p class="muted">暂无成员。</p>'}
+              <div class="form-grid">
+                <div class="field">
+                  <label for="output_id">成果编号 *</label>
+                  {output_id_field}
                 </div>
-              </div>
-              <div class="field">
-                <label>参与人</label>
-                <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
-                  {participant_checkboxes if participant_checkboxes else '<p class="muted">暂无成员。</p>'}
+                <div class="field">
+                  <label for="title">成果标题 *</label>
+                  <input id="title" name="title" value="{html.escape(output.title) if output else ''}" required />
                 </div>
-              </div>
-              <div class="field">
-                <label>关联项目</label>
-                <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
-                  {project_checkboxes if project_checkboxes else '<p class="muted">暂无项目。</p>'}
+                <div class="field">
+                  <label for="output_type">成果类型 *</label>
+                  <select id="output_type" name="output_type" required style="width:100%;padding:12px 14px;border-radius:14px;border:1px solid var(--line);" onchange="toggleOutputFields(this.value)">{output_type_options}</select>
                 </div>
-              </div>
-              <div class="field">
-                <label for="keywords">关键词（逗号分隔）</label>
-                <input id="keywords" name="keywords" value="{html.escape(', '.join(output.keywords)) if output else ''}" placeholder="keyword1, keyword2, keyword3" />
-              </div>
-              <div class="field">
-                <label for="summary">摘要</label>
-                <textarea id="summary" name="summary" rows="4" style="width:100%;resize:vertical;">{html.escape(output.summary) if output else ''}</textarea>
-              </div>
-              <div class="field">
-                <label for="notes">备注</label>
-                <textarea id="notes" name="notes" rows="3" style="width:100%;resize:vertical;">{html.escape(output.notes) if output else ''}</textarea>
+                <div class="field">
+                  <label for="year">年份</label>
+                  <input id="year" name="year" type="number" min="1900" max="2100" value="{output.year if output and output.year else ''}" />
+                </div>
+                <div class="field span-2">
+                  <label>负责人 *</label>
+                  <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
+                    {owner_checkboxes if owner_checkboxes else '<p class="muted">暂无成员。</p>'}
+                  </div>
+                </div>
+                <div class="field span-2">
+                  <label>参与人</label>
+                  <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
+                    {participant_checkboxes if participant_checkboxes else '<p class="muted">暂无成员。</p>'}
+                  </div>
+                </div>
+                <div class="field span-2">
+                  <label>关联项目</label>
+                  <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
+                    {project_checkboxes if project_checkboxes else '<p class="muted">暂无项目。</p>'}
+                  </div>
+                </div>
+                <div class="field span-2">
+                  <label for="keywords">关键词（逗号分隔）</label>
+                  <input id="keywords" name="keywords" value="{html.escape(', '.join(output.keywords)) if output else ''}" placeholder="keyword1, keyword2, keyword3" />
+                </div>
+                <div class="field span-2">
+                  <label for="summary">摘要</label>
+                  <textarea id="summary" name="summary" rows="4" style="width:100%;resize:vertical;">{html.escape(output.summary) if output else ''}</textarea>
+                </div>
+                <div class="field span-2">
+                  <label for="notes">备注</label>
+                  <textarea id="notes" name="notes" rows="3" style="width:100%;resize:vertical;">{html.escape(output.notes) if output else ''}</textarea>
+                </div>
               </div>
 
-              <div id="article-fields" {article_display}>
-                <h3 style="margin-top:20px;margin-bottom:16px;">文章专属字段</h3>
-                <div class="field">
-                  <label for="article_type">文章类型 *</label>
-                  <input id="article_type" name="article_type" value="{html.escape(article.article_type) if article else ''}" placeholder="如：Original Article, Review等" />
+              <div id="article-fields" {article_display} class="source-card">
+                <h3>文章专属字段</h3>
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="article_type">文章类型 *</label>
+                    <input id="article_type" name="article_type" value="{html.escape(article.article_type) if article else ''}" placeholder="如：Original Article, Review等" />
+                  </div>
+                  <div class="field">
+                    <label for="journal">期刊</label>
+                    <input id="journal" name="journal" value="{html.escape(article.journal) if article else ''}" />
+                  </div>
+                  <div class="field">
+                    <label for="doi">DOI</label>
+                    <input id="doi" name="doi" value="{html.escape(article.doi) if article else ''}" />
+                  </div>
+                  <div class="field">
+                    <label for="pmid">PMID</label>
+                    <input id="pmid" name="pmid" value="{html.escape(article.pmid) if article else ''}" />
+                  </div>
+                  <div class="field">
+                    <label for="issn">ISSN</label>
+                    <input id="issn" name="issn" value="{html.escape(article.issn) if article else ''}" />
+                  </div>
+                  <div class="field">
+                    <label for="submission_status">投稿状态</label>
+                    <input id="submission_status" name="submission_status" value="{html.escape(article.submission_status) if article else ''}" placeholder="如：已发表、审稿中等" />
+                  </div>
                 </div>
-                <div class="field">
-                  <label for="journal">期刊</label>
-                  <input id="journal" name="journal" value="{html.escape(article.journal) if article else ''}" />
-                </div>
-                <div class="field">
-                  <label for="doi">DOI</label>
-                  <input id="doi" name="doi" value="{html.escape(article.doi) if article else ''}" />
-                </div>
-                <div class="field">
-                  <label for="pmid">PMID</label>
-                  <input id="pmid" name="pmid" value="{html.escape(article.pmid) if article else ''}" />
-                </div>
-                <div class="field">
-                  <label for="issn">ISSN</label>
-                  <input id="issn" name="issn" value="{html.escape(article.issn) if article else ''}" />
-                </div>
-                <div class="field">
-                  <label for="submission_status">投稿状态</label>
-                  <input id="submission_status" name="submission_status" value="{html.escape(article.submission_status) if article else ''}" placeholder="如：已发表、审稿中等" />
+              </div>
+
+              <div id="patent-fields" {patent_display} class="source-card">
+                <h3>专利专属字段</h3>
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="patent_number">专利号</label>
+                    <input id="patent_number" name="patent_number" value="{html.escape(patent.patent_number) if patent else ''}" />
+                  </div>
+                  <div class="field">
+                    <label for="application_number">申请号</label>
+                    <input id="application_number" name="application_number" value="{html.escape(patent.application_number) if patent else ''}" />
+                  </div>
+                  <div class="field span-2">
+                    <label for="patent_title">专利标题</label>
+                    <input id="patent_title" name="patent_title" value="{html.escape(patent.title) if patent else ''}" />
+                  </div>
+                  <div class="field">
+                    <label for="patent_country">国家/地区</label>
+                    <input id="patent_country" name="patent_country" value="{html.escape(patent.country_code) if patent else ''}" />
+                  </div>
+                  <div class="field">
+                    <label for="patent_kind">类型代码</label>
+                    <input id="patent_kind" name="patent_kind" value="{html.escape(patent.kind_code) if patent else ''}" />
+                  </div>
+                  <div class="field span-2">
+                    <label for="patent_status">专利状态</label>
+                    <input id="patent_status" name="patent_status" value="{html.escape(patent.status) if patent else ''}" />
+                  </div>
                 </div>
               </div>
 
@@ -1383,17 +1837,25 @@ class WebApplication:
               </div>
             </form>
             <script>
-              function toggleArticleFields(outputType) {{
+              function toggleOutputFields(outputType) {{
                 const articleFields = document.getElementById('article-fields');
+                const patentFields = document.getElementById('patent-fields');
                 const articleTypeInput = document.getElementById('article_type');
                 if (outputType === 'article') {{
                   articleFields.style.display = 'block';
+                  patentFields.style.display = 'none';
                   articleTypeInput.required = true;
+                }} else if (outputType === 'patent') {{
+                  articleFields.style.display = 'none';
+                  patentFields.style.display = 'block';
+                  articleTypeInput.required = false;
                 }} else {{
                   articleFields.style.display = 'none';
+                  patentFields.style.display = 'none';
                   articleTypeInput.required = false;
                 }}
               }}
+              toggleOutputFields(document.getElementById('output_type').value);
             </script>
           </article>
         </section>
@@ -1430,6 +1892,15 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 return
             self._send_html("Login", self.app.render_login_page())
             return
+        if path == "/register":
+            if not self.app.auth_store.has_users():
+                self.app.redirect(self, "/setup")
+                return
+            if user is not None:
+                self.app.redirect(self, "/")
+                return
+            self._send_html("Register", self.app.render_register_page())
+            return
         if path == "/setup":
             if self.app.auth_store.has_users():
                 self.app.redirect(self, "/login")
@@ -1450,6 +1921,9 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/members/add":
             self._send_html("Add Member", self.app.render_member_form(user))
+            return
+        if path == "/accounts/pending":
+            self._send_html("Pending Accounts", self.app.render_pending_accounts_page(user))
             return
         if path.startswith("/members/") and path.endswith("/edit"):
             member_id = path[len("/members/") : -len("/edit")].strip("/")
@@ -1508,6 +1982,9 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
         if path == "/outputs":
             self._send_html("Outputs", self.app.render_outputs_page(user))
             return
+        if path == "/import":
+            self._send_html("Import", self.app.render_import_page(user))
+            return
         if path == "/outputs/add":
             self._send_html("Add Output", self.app.render_output_form(user))
             return
@@ -1553,7 +2030,11 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             password = fields.get("password", "")
             user = self.app.auth_store.authenticate(username, password)
             if user is None:
-                self._send_html("登录", self.app.render_login_page("用户名或密码错误。"), status=401)
+                existing = self.app.auth_store.get_user(username)
+                if existing is not None and existing.account_status == ACCOUNT_STATUS_PENDING:
+                    self._send_html("登录", self.app.render_login_page("账号正在等待管理员审核。"), status=403)
+                    return
+                self._send_html("登录", self.app.render_login_page("姓名或密码错误。"), status=401)
                 return
             token = self.app.sessions.create(user.username)
             self.send_response(303)
@@ -1580,9 +2061,36 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             self.app.redirect(self, "/login")
             return
 
+        if path == "/register":
+            if not self.app.auth_store.has_users():
+                self.app.redirect(self, "/setup")
+                return
+            display_name = fields.get("display_name", "").strip()
+            password = fields.get("password", "").strip()
+            username = display_name
+            try:
+                self.app.auth_store.create_user(
+                    username,
+                    password,
+                    display_name=display_name,
+                    role=Role.MEMBER,
+                    member_id=username,
+                    account_status=ACCOUNT_STATUS_PENDING,
+                )
+            except ValueError as exc:
+                self._send_html("注册", self.app.render_register_page(error=str(exc)), status=400)
+                return
+            self._send_html("注册", self.app.render_register_page(notice="注册申请已提交，请等待管理员审核。"))
+            return
+
         user = self.app.get_current_user(self)
         if user is None:
             self.app.redirect(self, "/login")
+            return
+
+        if path.startswith("/accounts/") and path.endswith("/approve"):
+            username = unquote(path[len("/accounts/") : -len("/approve")].strip("/"))
+            self._handle_account_approve(user, username)
             return
 
         if path == "/members/add":
@@ -1611,6 +2119,9 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/outputs/add":
             self._handle_output_add(user, fields, fields_multi)
+            return
+        if path == "/import/fetch":
+            self._handle_import_fetch(user, fields, fields_multi)
             return
         if path.startswith("/outputs/") and path.endswith("/edit"):
             output_id = path[len("/outputs/") : -len("/edit")].strip("/")
@@ -1679,6 +2190,38 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             self._send_html("Member Detail", self.app.render_member_detail(user, member, notice=str(exc)), status=400)
             return
         self.app.redirect(self, "/members")
+
+    def _handle_account_approve(self, user: WebUser, username: str) -> None:
+        if user.role not in {Role.ADMIN, Role.PI}:
+            self._send_html(
+                "Pending Accounts",
+                self.app.render_pending_accounts_page(user, notice="当前账号没有审核权限。"),
+                status=403,
+            )
+            return
+        try:
+            approved = self.app.auth_store.approve_user(username, approved_by=user.username)
+            try:
+                self.app.repository.get_member(approved.member_id)
+            except KeyError:
+                self.app.repository.add_member(
+                    Member(
+                        member_id=approved.member_id,
+                        name=approved.display_name,
+                        role=Role.MEMBER,
+                    )
+                )
+        except (ValueError, KeyError) as exc:
+            self._send_html(
+                "Pending Accounts",
+                self.app.render_pending_accounts_page(user, notice=str(exc)),
+                status=400,
+            )
+            return
+        self._send_html(
+            "Pending Accounts",
+            self.app.render_pending_accounts_page(user, notice=f"已通过 {approved.display_name} 的注册申请。"),
+        )
 
     def _handle_project_add(self, user: WebUser, fields: Dict[str, str], fields_multi: Dict[str, List[str]]) -> None:
         try:
@@ -1780,6 +2323,18 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             self._send_html("Add Output", self.app.render_output_form(user, error=str(exc)), status=400)
             return
         self.app.redirect(self, "/outputs")
+
+    def _handle_import_fetch(self, user: WebUser, fields: Dict[str, str], fields_multi: Dict[str, List[str]]) -> None:
+        try:
+            output = self.app._build_output_from_fetch(fields, user)
+            try:
+                self.app.repository.add_output(output, actor_role=user.role, actor_member_id=user.member_id)
+            except ValueError:
+                pass
+        except (ValueError, KeyError, PermissionError) as exc:
+            self._send_html("Import", self.app.render_import_page(user, error=str(exc)), status=400)
+            return
+        self.app.redirect(self, f"/outputs/{output.output_id}")
 
     def _handle_output_edit(self, user: WebUser, output_id: str, fields: Dict[str, str], fields_multi: Dict[str, List[str]]) -> None:
         try:

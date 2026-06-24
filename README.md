@@ -134,6 +134,8 @@ PYTHONPATH=src python3 -m lab_literature_manager.cli web serve
 
 登录后可查看仪表盘、成员、项目、成果列表和单条成果详情，并在页面上提交/审核成果。
 
+在“成果管理”页可以进入“从 DOI / PubMed / 专利抓取”入口，先抓取外部元数据，再跳回成果编辑页继续补全字段。
+
 ### 运行测试
 
 ```bash
