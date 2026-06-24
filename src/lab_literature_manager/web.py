@@ -448,29 +448,37 @@ class WebApplication:
   <title>{html.escape(title)}</title>
   <style>
     :root {{
-      --bg: #f4f1ea;
+      --bg: #f8f9fa;
       --panel: #ffffff;
-      --panel-soft: #f8f7f2;
-      --text: #122018;
-      --muted: #5d6b66;
-      --line: rgba(18, 32, 24, 0.12);
-      --accent: #0f766e;
-      --accent-strong: #115e59;
-      --accent-soft: rgba(15, 118, 110, 0.12);
-      --gold: #c28a1a;
-      --danger: #b45309;
-      --shadow: 0 18px 50px rgba(18, 32, 24, 0.08);
-      --radius: 20px;
+      --panel-soft: #f8f9fb;
+      --text: #1a202c;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --accent: #0ea5e9;
+      --accent-strong: #0284c7;
+      --accent-soft: #e0f2fe;
+      --accent-hover: #0c8dd7;
+      --gold: #f59e0b;
+      --danger: #ef4444;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+      --radius: 12px;
+      --radius-sm: 8px;
+      --radius-lg: 16px;
+      --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
       color: var(--text);
-      background:
-        radial-gradient(circle at top left, rgba(15,118,110,0.12), transparent 35%),
-        radial-gradient(circle at top right, rgba(194,138,26,0.11), transparent 30%),
-        linear-gradient(180deg, #faf8f3 0%, var(--bg) 100%);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      line-height: 1.6;
     }}
     a {{ color: inherit; text-decoration: none; }}
     .shell {{
@@ -479,89 +487,126 @@ class WebApplication:
       grid-template-columns: 260px 1fr;
     }}
     .sidebar {{
-      padding: 28px 22px;
-      background: rgba(255, 255, 255, 0.72);
+      padding: 24px 20px;
+      background: var(--panel);
       border-right: 1px solid var(--line);
-      backdrop-filter: blur(10px);
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
     }}
     .brand {{
       display: flex;
       gap: 12px;
       align-items: center;
-      margin-bottom: 28px;
+      margin-bottom: 24px;
     }}
     .brand-mark {{
-      width: 42px;
-      height: 42px;
-      border-radius: 14px;
-      background: linear-gradient(135deg, var(--accent), var(--gold));
+      width: 40px;
+      height: 40px;
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
       box-shadow: var(--shadow);
+      flex-shrink: 0;
     }}
     .brand h1 {{
       margin: 0;
-      font-size: 1rem;
-      line-height: 1.2;
+      font-size: 0.95rem;
+      line-height: 1.3;
+      font-weight: 600;
+      color: var(--text);
     }}
     .brand p {{
-      margin: 3px 0 0;
+      margin: 4px 0 0;
       color: var(--muted);
-      font-size: 0.84rem;
+      font-size: 0.8rem;
+      line-height: 1.3;
     }}
     .nav-section {{
       display: grid;
-      gap: 8px;
-      margin-top: 18px;
+      gap: 6px;
+      margin-top: 20px;
     }}
     .nav-link {{
-      padding: 11px 14px;
-      border-radius: 14px;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
       color: var(--muted);
       border: 1px solid transparent;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: var(--transition);
     }}
-    .nav-link.active, .nav-link:hover {{
+    .nav-link:hover {{
       color: var(--text);
-      background: var(--panel);
+      background: var(--panel-soft);
       border-color: var(--line);
-      box-shadow: 0 8px 24px rgba(18, 32, 24, 0.06);
+    }}
+    .nav-link.active {{
+      color: var(--accent-strong);
+      background: var(--accent-soft);
+      border-color: transparent;
+      font-weight: 600;
+    }}
+    .nav-badge {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 20px;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 10px;
+      background: var(--accent);
+      color: white;
+      font-size: 0.7rem;
+      font-weight: 700;
+      line-height: 1;
     }}
     .content {{
-      padding: 28px;
+      padding: 32px;
+      max-width: 1400px;
     }}
     .topbar {{
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 16px;
-      margin-bottom: 22px;
+      margin-bottom: 24px;
     }}
     .topbar h2 {{
       margin: 0;
-      font-size: 1.8rem;
-      letter-spacing: -0.03em;
+      font-size: 1.75rem;
+      letter-spacing: -0.02em;
+      font-weight: 700;
+      color: var(--text);
     }}
     .topbar .subtle {{
-      margin-top: 6px;
+      margin-top: 4px;
       color: var(--muted);
+      font-size: 0.9rem;
     }}
     .user-pill {{
       display: inline-flex;
       align-items: center;
       gap: 10px;
-      padding: 10px 14px;
-      border-radius: 999px;
-      background: rgba(255,255,255,0.86);
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      background: var(--panel-soft);
       border: 1px solid var(--line);
-      box-shadow: 0 10px 30px rgba(18, 32, 24, 0.05);
     }}
     .avatar {{
-      width: 30px;
-      height: 30px;
-      border-radius: 999px;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
       display: grid;
       place-items: center;
       color: white;
       font-size: 0.85rem;
-      background: linear-gradient(135deg, var(--accent-strong), var(--accent));
+      font-weight: 600;
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      flex-shrink: 0;
     }}
     .grid {{
       display: grid;
@@ -571,26 +616,34 @@ class WebApplication:
       grid-template-columns: repeat(4, minmax(0, 1fr));
     }}
     .card {{
-      background: rgba(255,255,255,0.9);
+      background: var(--panel);
       border: 1px solid var(--line);
       border-radius: var(--radius);
+      box-shadow: var(--shadow-sm);
+      padding: 20px;
+      transition: var(--transition);
+    }}
+    .card:hover {{
       box-shadow: var(--shadow);
-      padding: 18px;
     }}
     .metric-label {{
       color: var(--muted);
-      font-size: 0.9rem;
-      margin-bottom: 10px;
+      font-size: 0.85rem;
+      margin-bottom: 8px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }}
     .metric-value {{
       font-size: 2rem;
       font-weight: 700;
-      letter-spacing: -0.04em;
+      letter-spacing: -0.02em;
+      color: var(--text);
     }}
     .metric-hint {{
-      margin-top: 10px;
+      margin-top: 8px;
       color: var(--muted);
-      font-size: 0.86rem;
+      font-size: 0.85rem;
     }}
     .panels {{
       grid-template-columns: 1.4fr 0.9fr;
@@ -641,33 +694,59 @@ class WebApplication:
     }}
     .table th, .table td {{
       text-align: left;
-      padding: 12px 10px;
-      border-top: 1px solid var(--line);
+      padding: 12px 12px;
+      border-bottom: 1px solid var(--line);
       vertical-align: top;
     }}
     .table th {{
       color: var(--muted);
-      font-size: 0.84rem;
-      letter-spacing: 0.03em;
+      font-size: 0.8rem;
+      letter-spacing: 0.05em;
       text-transform: uppercase;
+      font-weight: 600;
+      background: var(--panel-soft);
+    }}
+    .table tbody tr {{
+      transition: var(--transition);
+    }}
+    .table tbody tr:hover {{
+      background: var(--panel-soft);
+    }}
+    .table a {{
+      color: var(--accent);
+      font-weight: 500;
+      transition: var(--transition);
+    }}
+    .table a:hover {{
+      color: var(--accent-strong);
+      text-decoration: underline;
     }}
     .badge {{
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      font-size: 0.82rem;
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 500;
       background: var(--accent-soft);
       color: var(--accent-strong);
     }}
-    .badge.status-submitted, .badge.status-approved {{
-      background: rgba(194, 138, 26, 0.14);
-      color: #8b5e12;
+    .badge.status-submitted {{
+      background: #fef3c7;
+      color: #92400e;
+    }}
+    .badge.status-approved {{
+      background: #d1fae5;
+      color: #065f46;
     }}
     .badge.status-returned {{
-      background: rgba(180, 83, 9, 0.12);
-      color: var(--danger);
+      background: #fee2e2;
+      color: #991b1b;
+    }}
+    .badge.status-draft {{
+      background: #f3f4f6;
+      color: #374151;
     }}
     .login-shell {{
       min-height: 100vh;
@@ -809,18 +888,30 @@ class WebApplication:
     input, select, textarea, button {{
       font: inherit;
     }}
-    input, textarea {{
+    input, textarea, select {{
       width: 100%;
-      border-radius: 14px;
+      border-radius: var(--radius-sm);
       border: 1px solid var(--line);
-      padding: 12px 14px;
-      background: #fff;
+      padding: 10px 12px;
+      background: var(--panel);
       color: var(--text);
+      transition: var(--transition);
+      font-size: 0.9rem;
     }}
-    input:focus, textarea:focus {{
+    input:focus, textarea:focus, select:focus {{
       outline: none;
-      border-color: rgba(15,118,110,0.45);
-      box-shadow: 0 0 0 4px rgba(15,118,110,0.12);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }}
+    input:hover, textarea:hover, select:hover {{
+      border-color: var(--muted);
+    }}
+    label {{
+      display: block;
+      margin-bottom: 6px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--text);
     }}
     .button-row {{
       display: flex;
@@ -833,24 +924,42 @@ class WebApplication:
       justify-content: center;
       align-items: center;
       gap: 8px;
-      padding: 11px 16px;
-      border-radius: 14px;
+      padding: 10px 16px;
+      border-radius: var(--radius-sm);
       border: 1px solid transparent;
       cursor: pointer;
       text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: var(--transition);
+      white-space: nowrap;
     }}
     .button.primary {{
       background: var(--accent);
       color: white;
+      border-color: var(--accent);
+    }}
+    .button.primary:hover {{
+      background: var(--accent-hover);
+      border-color: var(--accent-hover);
+      box-shadow: var(--shadow-sm);
     }}
     .button.secondary {{
-      background: rgba(255,255,255,0.86);
+      background: var(--panel);
       border-color: var(--line);
       color: var(--text);
+    }}
+    .button.secondary:hover {{
+      background: var(--panel-soft);
+      border-color: var(--muted);
     }}
     .button.ghost {{
       background: transparent;
       border-color: var(--line);
+      color: var(--muted);
+    }}
+    .button.ghost:hover {{
+      background: var(--panel-soft);
       color: var(--text);
     }}
     .split-field {{
@@ -1003,20 +1112,31 @@ class WebApplication:
             if self.auth_store.has_users():
                 return ""
             return ""
+
+        # 计算待审核数量和待审批账号数量
+        pending_review_count = 0
+        pending_account_count = 0
+        if current_user.role in {Role.ADMIN, Role.PI}:
+            pending_outputs = self.repository.list_outputs(status=ReviewStatus.SUBMITTED)
+            pending_review_count = len(pending_outputs)
+            pending_users = self.auth_store.list_pending_users()
+            pending_account_count = len(pending_users)
+
         links = [
-            ("dashboard", "/", "仪表盘"),
-            ("outputs", "/outputs", "成果管理"),
-            ("logout", "/logout", "退出登录"),
+            ("dashboard", "/", "仪表盘", 0),
+            ("outputs", "/outputs", "成果管理", 0),
+            ("logout", "/logout", "退出登录", 0),
         ]
         if current_user.role in {Role.ADMIN, Role.PI}:
-            links.insert(1, ("members", "/members", "成员管理"))
-            links.insert(2, ("projects", "/projects", "项目管理"))
-            links.insert(2, ("reviews", "/reviews", "审核工作台"))
-            links.insert(3, ("accounts", "/accounts/pending", "账号审核"))
+            links.insert(1, ("members", "/members", "成员管理", 0))
+            links.insert(2, ("projects", "/projects", "项目管理", 0))
+            links.insert(2, ("reviews", "/reviews", "审核工作台", pending_review_count))
+            links.insert(3, ("accounts", "/accounts/pending", "账号审核", pending_account_count))
         items = []
-        for section, href, label in links:
+        for section, href, label, badge_count in links:
             active = " active" if active_section == section else ""
-            items.append(f'<a class="nav-link{active}" href="{href}">{html.escape(label)}</a>')
+            badge_html = f'<span class="nav-badge">{badge_count}</span>' if badge_count > 0 else ''
+            items.append(f'<a class="nav-link{active}" href="{href}">{html.escape(label)}{badge_html}</a>')
         avatar = current_user.display_name[:1].upper() if current_user.display_name else current_user.username[:1].upper()
         return f"""
         <aside class="sidebar">
@@ -1358,6 +1478,7 @@ class WebApplication:
             return self.render_layout("审核工作台", body, active_section="reviews", current_user=current_user, notice=notice)
 
         pending_outputs = self.repository.list_outputs(status=ReviewStatus.SUBMITTED)
+        pending_count = len(pending_outputs)
         rows = "".join(
             f"<tr>"
             f"<td><a href=\"/outputs/{html.escape(output.output_id)}\">{html.escape(output.output_id)}</a></td>"
@@ -1381,11 +1502,12 @@ class WebApplication:
             if rows
             else '<div class="empty-state">暂无待审核成果。</div>'
         )
+        pending_badge = f'<span class="badge" style="background:rgba(194,138,26,0.14);color:#8b5e12;font-weight:600;">{pending_count} 条待审核</span>' if pending_count > 0 else ''
         body = f"""
         <section class="stack">
           <div class="topbar">
             <div>
-              <h2>审核工作台</h2>
+              <h2>审核工作台 {pending_badge}</h2>
               <div class="subtle">集中处理已提交成果。</div>
             </div>
             <div class="button-row">
