@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-from lab_literature_manager.data_fetcher import ArticleData, DataFetcher
+from lab_literature_manager.data_fetcher import ArticleData, DataFetcher, infer_document_draft
 from lab_literature_manager.models import ArticleMetadata, Member, OutputType, Project, ResearchOutput, ReviewStatus, Role
 from lab_literature_manager.repository import ResearchRepository
 from lab_literature_manager.web import LocalAuthStore, LocalWebRequestHandler, WebApplication
@@ -58,7 +58,7 @@ class WebUiTests(TestCase):
             app.save_settings(app.load_settings().__class__(workspace_name="马老师课题组"))
             login_html = app.render_login_page()
             self.assertIn("马老师课题组", login_html)
-            self.assertIn("姓名", login_html)
+            self.assertIn("账号", login_html)
             self.assertIn("密码", login_html)
             self.assertIn("验证码", login_html)
             self.assertIn("/register", login_html)
@@ -133,6 +133,7 @@ class WebUiTests(TestCase):
             self.assertIn("审核工作台", review_html)
             self.assertIn("通过", review_html)
             self.assertIn("退回", review_html)
+            self.assertIn("next", review_html)
 
             member_html = app.render_member_detail(admin, app.repository.get_member("alice"))
             self.assertIn("设为管理员", member_html)
@@ -273,6 +274,46 @@ class WebUiTests(TestCase):
                 )
             self.assertEqual(original.output_type, OutputType.ARTICLE)
             self.assertTrue(original.owner_member_ids)
+
+    def test_uploaded_document_text_can_be_inferred_into_a_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            _ = self._build_app(tmp_dir)
+            draft = infer_document_draft(
+                "manuscript.txt",
+                b"Title of the Study\nAbstract\nThis is a brief summary.\n2024\n",
+            )
+            self.assertIsNotNone(draft)
+            assert draft is not None
+            self.assertEqual(draft.output_type, "article")
+            self.assertEqual(draft.title, "Title of the Study")
+            self.assertEqual(draft.year, 2024)
+            self.assertIn("brief summary", draft.summary)
+
+    def test_published_output_transition_can_redirect_to_review_workbench(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app = self._build_app(tmp_dir)
+            admin = app.auth_store.authenticate("admin", "ChangeMe123")
+            assert admin is not None
+            app.repository.submit_output("article-1", actor_role=Role.ADMIN, actor_member_id="admin")
+
+            class FakeHandler:
+                def __init__(self, app):
+                    self.app = app
+                    self.send_error = Mock()
+                    self._headers = {}
+
+            request = FakeHandler(app)
+            with patch.object(app, "redirect") as mocked_redirect:
+                LocalWebRequestHandler._handle_output_transition(
+                    request,
+                    admin,
+                    "article-1",
+                    "approve",
+                    comment="通过Web审核",
+                    next_path="/reviews",
+                )
+            mocked_redirect.assert_called_once()
+            self.assertEqual(mocked_redirect.call_args.args[1], "/reviews")
 
     def test_registration_requires_admin_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

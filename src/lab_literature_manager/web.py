@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import cgi
 import hashlib
 import hmac
 import html
@@ -13,13 +14,14 @@ import threading
 from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from .data_fetcher import fetch_article_metadata
+from .data_fetcher import DocumentImportDraft, fetch_article_metadata, infer_document_draft
 from .models import (
     ArticleMetadata,
     Member,
@@ -1080,8 +1082,8 @@ class WebApplication:
               {error_html}
               <form method="post" action="/login">
                 <div class="field">
-                  <label for="username">姓名</label>
-                  <input id="username" name="username" autocomplete="name" required />
+                  <label for="username">账号</label>
+                  <input id="username" name="username" autocomplete="username" required />
                 </div>
                 <div class="field">
                   <label for="password">密码</label>
@@ -1362,8 +1364,8 @@ class WebApplication:
             f"<td>{html.escape(output_type_label(output.output_type))}</td>"
             f"<td>{self._status_badge(output.review_status)}</td>"
             f"<td>"
-            f"<form method=\"post\" action=\"/outputs/{html.escape(output.output_id)}/approve\" style=\"display:inline-block;margin-right:8px;\"><input type=\"hidden\" name=\"comment\" value=\"通过Web审核\" /><button class=\"button primary\" type=\"submit\">通过</button></form>"
-            f"<form method=\"post\" action=\"/outputs/{html.escape(output.output_id)}/return\" style=\"display:inline-block;\"><input type=\"hidden\" name=\"comment\" value=\"退回补充材料\" /><button class=\"button secondary\" type=\"submit\">退回</button></form>"
+            f"<form method=\"post\" action=\"/outputs/{html.escape(output.output_id)}/approve\" style=\"display:inline-block;margin-right:8px;\"><input type=\"hidden\" name=\"comment\" value=\"通过Web审核\" /><input type=\"hidden\" name=\"next\" value=\"/reviews\" /><button class=\"button primary\" type=\"submit\">通过</button></form>"
+            f"<form method=\"post\" action=\"/outputs/{html.escape(output.output_id)}/return\" style=\"display:inline-block;\"><input type=\"hidden\" name=\"comment\" value=\"退回补充材料\" /><input type=\"hidden\" name=\"next\" value=\"/reviews\" /><button class=\"button secondary\" type=\"submit\">退回</button></form>"
             f"</td>"
             f"</tr>"
             for output in pending_outputs
@@ -1478,44 +1480,62 @@ class WebApplication:
             <article class="workflow-card"><strong>PubMed / E-utilities</strong><span>适合医学文献，可自动抓取 PMID 对应的文章元数据。</span></article>
             <article class="workflow-card"><strong>专利 / 公开数据源</strong><span>按专利号或申请号检索，预填专利标题、申请信息和权利人。</span></article>
           </div>
-          <article class="card">
-            <form method="post" action="/import/fetch" class="stack">
-              <div class="form-grid">
-                <div class="field span-2">
-                  <label for="source_type">抓取类型</label>
-                  <select id="source_type" name="source_type" required style="width:100%;padding:12px 14px;border-radius:14px;border:1px solid var(--line);">
-                    <option value="doi">DOI / CrossRef</option>
-                    <option value="pmid">PubMed / PMID</option>
-                    <option value="patent">专利号 / 申请号</option>
-                  </select>
+          <div class="detail-grid">
+            <article class="card">
+              <form method="post" action="/import/fetch" class="stack">
+                <div class="form-grid">
+                  <div class="field span-2">
+                    <label for="source_type">抓取类型</label>
+                    <select id="source_type" name="source_type" required style="width:100%;padding:12px 14px;border-radius:14px;border:1px solid var(--line);">
+                      <option value="doi">DOI / CrossRef</option>
+                      <option value="pmid">PubMed / PMID</option>
+                      <option value="patent">专利号 / 申请号</option>
+                    </select>
+                  </div>
+                  <div class="field span-2">
+                    <label for="query">检索值</label>
+                    <input id="query" name="query" required value="10.3390/biom12060824" placeholder="例如 10.3390/biom12060824、38902948 或 CN202410000000.0" />
+                    <div class="inline-help">抓取后会直接进入成果详情页，供你继续补全和核对字段。</div>
+                  </div>
+                  <div class="field span-2">
+                    <label for="title">成果标题（可选）</label>
+                    <input id="title" name="title" placeholder="不填则使用抓取到的标题" />
+                  </div>
+                  <div class="field">
+                    <label for="output_id">成果编号</label>
+                    <input id="output_id" name="output_id" placeholder="不填则自动生成" />
+                  </div>
+                  <div class="field span-2">
+                    <label>负责人</label>
+                    <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
+                      {owner_options if owner_options else '<p class="muted">暂无成员。</p>'}
+                    </div>
+                    <input id="owner_member_ids_manual" name="owner_member_ids_manual" placeholder="手动输入负责人，多个用逗号、分号或换行分隔" style="margin-top:10px;" />
+                  </div>
                 </div>
-                <div class="field span-2">
-                  <label for="query">检索值</label>
-                  <input id="query" name="query" required value="10.3390/biom12060824" placeholder="例如 10.3390/biom12060824、38902948 或 CN202410000000.0" />
-                  <div class="inline-help">系统会尝试把结果预填到成果编辑页；如果没有命中，也可以直接回到表单手动填写。</div>
+                <div class="button-row">
+                  <button class="button primary" type="submit">抓取并预填</button>
+                  <a class="button secondary" href="/outputs/add">直接手动录入</a>
                 </div>
-                <div class="field span-2">
-                  <label for="title">成果标题（可选）</label>
-                  <input id="title" name="title" placeholder="不填则使用抓取到的标题" />
+              </form>
+            </article>
+            <article class="card">
+              <form method="post" action="/import/upload" enctype="multipart/form-data" class="stack">
+                <div class="section-banner" style="margin-bottom: 0;">
+                  <h3>上传文档识别</h3>
+                  <p>上传论文 PDF、Word 或纯文本，系统会尝试自动识别题名、年份、摘要、DOI / PMID / 专利号，并预填到成果表单。</p>
                 </div>
                 <div class="field">
-                  <label for="output_id">成果编号</label>
-                  <input id="output_id" name="output_id" placeholder="不填则自动生成" />
+                  <label for="document_file">选择文档</label>
+                  <input id="document_file" name="document_file" type="file" accept=".pdf,.docx,.txt,.html,.htm,.xml" required />
+                  <div class="inline-help">建议上传可复制文本的版本，扫描件图片目前无法稳定识别。</div>
                 </div>
-                <div class="field span-2">
-                  <label>负责人</label>
-                  <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
-                    {owner_options if owner_options else '<p class="muted">暂无成员。</p>'}
-                  </div>
-                  <input id="owner_member_ids_manual" name="owner_member_ids_manual" placeholder="手动输入负责人，多个用逗号、分号或换行分隔" style="margin-top:10px;" />
+                <div class="button-row">
+                  <button class="button primary" type="submit">上传并识别</button>
                 </div>
-              </div>
-              <div class="button-row">
-                <button class="button primary" type="submit">抓取并预填</button>
-                <a class="button secondary" href="/outputs/add">直接手动录入</a>
-              </div>
-            </form>
-          </article>
+              </form>
+            </article>
+          </div>
         </section>
         """
         return self.render_layout("外部数据抓取", body, active_section="outputs", current_user=current_user)
@@ -1718,6 +1738,56 @@ class WebApplication:
                 patent=patent,
             )
         raise ValueError("请选择有效的抓取类型。")
+
+    def _build_output_from_document_draft(self, draft: DocumentImportDraft, current_user: WebUser) -> ResearchOutput:
+        owner_ids = [current_user.member_id]
+        if draft.output_type == "patent":
+            patent_data = draft.patent
+            if patent_data is None:
+                raise ValueError("文档识别结果缺少专利信息。")
+            patent = PatentMetadata(
+                patent_number=patent_data.patent_number,
+                application_number=patent_data.application_number,
+                title=patent_data.title,
+                country_code=patent_data.country_code,
+                kind_code=patent_data.kind_code,
+                inventors=patent_data.inventors,
+                assignees=patent_data.applicants,
+                application_date=patent_data.filing_date or "",
+                publication_date=patent_data.publication_date or "",
+                status=patent_data.status or "",
+                abstract=patent_data.abstract or "",
+                url=patent_data.url or "",
+            )
+            return ResearchOutput(
+                output_id=self.repository.generate_output_id(OutputType.PATENT, year=draft.year),
+                title=draft.title,
+                output_type=OutputType.PATENT,
+                owner_member_ids=owner_ids,
+                year=draft.year,
+                summary=draft.summary,
+                patent=patent,
+            )
+        article_data = draft.article
+        if article_data is None:
+            raise ValueError("文档识别结果缺少文章信息。")
+        article = ArticleMetadata(
+            article_type="research_article",
+            journal=article_data.journal or "",
+            doi=article_data.doi or "",
+            pmid=article_data.pmid or "",
+            publication_year=article_data.year,
+            first_authors=article_data.authors[:3],
+        )
+        return ResearchOutput(
+            output_id=self.repository.generate_output_id(OutputType.ARTICLE, year=draft.year or article_data.year),
+            title=draft.title,
+            output_type=OutputType.ARTICLE,
+            owner_member_ids=owner_ids,
+            year=draft.year or article_data.year,
+            summary=draft.summary,
+            article=article,
+        )
 
     def _fetch_patent_metadata(self, query: str) -> Optional[object]:
         from .data_fetcher import DataFetcher
@@ -1995,17 +2065,31 @@ class WebApplication:
         return self.render_layout(project.name, body, active_section="projects", current_user=current_user, notice=notice)
 
     def render_output_form(
-        self, current_user: WebUser, output: Optional[ResearchOutput] = None, error: str = ""
+        self,
+        current_user: WebUser,
+        output: Optional[ResearchOutput] = None,
+        error: str = "",
+        *,
+        notice: str = "",
+        form_action: Optional[str] = None,
+        form_title: Optional[str] = None,
+        submit_label: Optional[str] = None,
+        prefill_mode: bool = False,
     ) -> str:
-        is_edit = output is not None
-        title = "编辑成果" if is_edit else "添加成果"
-        action = f"/outputs/{html.escape(output.output_id)}/edit" if is_edit else "/outputs/add"
+        is_edit = output is not None and not prefill_mode
+        title = form_title or ("编辑成果" if is_edit else "添加成果")
+        action = form_action or (f"/outputs/{html.escape(output.output_id)}/edit" if is_edit else "/outputs/add")
         output_id_field = (
             f'<input id="output_id" name="output_id" value="{html.escape(output.output_id)}" readonly />'
             if is_edit
-            else '<input id="output_id" name="output_id" placeholder="留空自动按类别生成，如 LW-2026-001" />'
+            else (
+                f'<input id="output_id" name="output_id" value="{html.escape(output.output_id)}" placeholder="留空自动按类别生成，如 LW-2026-001" />'
+                if output and prefill_mode and output.output_id
+                else '<input id="output_id" name="output_id" placeholder="留空自动按类别生成，如 LW-2026-001" />'
+            )
         )
         error_html = f'<div class="notice">{html.escape(error)}</div>' if error else ""
+        notice_html = f'<div class="notice">{html.escape(notice)}</div>' if notice else ""
         output_type_options = "".join(
             f'<option value="{ot.value}"{" selected" if output and output.output_type == ot else ""}>{html.escape(output_type_label(ot))}</option>'
             for ot in OutputType
@@ -2040,6 +2124,7 @@ class WebApplication:
             </div>
           </div>
           <article class="card">
+            {notice_html}
             {error_html}
             <form method="post" action="{action}" class="stack">
               <div class="form-grid">
@@ -2157,7 +2242,7 @@ class WebApplication:
 
               <div class="button-row">
                 <button class="button secondary" type="submit" formaction="{'/outputs/' + html.escape(output.output_id) + '/save' if is_edit else '/outputs/save'}" formnovalidate>保存草稿</button>
-                <button class="button primary" type="submit">{'提交修改' if is_edit else '提交审核'}</button>
+                <button class="button primary" type="submit">{submit_label or ('提交修改' if is_edit else '提交审核')}</button>
                 <a class="button secondary" href="/outputs">取消</a>
               </div>
             </form>
@@ -2362,8 +2447,13 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         length = int(self.headers.get("Content-Length", "0") or "0")
-        raw = self.rfile.read(length).decode("utf-8") if length else ""
-        parsed = parse_qs(raw, keep_blank_values=True)
+        content_type = self.headers.get("Content-Type", "")
+        is_multipart = "multipart/form-data" in content_type
+        raw = ""
+        parsed = {}
+        if not is_multipart:
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            parsed = parse_qs(raw, keep_blank_values=True)
         fields = {key: values[0] if values else "" for key, values in parsed.items()}
         fields_multi = parsed  # Keep the full parsed data for multi-value fields
 
@@ -2497,6 +2587,9 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
         if path == "/import/fetch":
             self._handle_import_fetch(user, fields, fields_multi)
             return
+        if path == "/import/upload":
+            self._handle_import_upload(user)
+            return
         if path.startswith("/outputs/") and path.endswith("/edit"):
             output_id = path[len("/outputs/") : -len("/edit")].strip("/")
             self._handle_output_edit(user, output_id, fields, fields_multi, save_mode="submit")
@@ -2516,11 +2609,23 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/outputs/") and path.endswith("/approve"):
             output_id = path[len("/outputs/") : -len("/approve")].strip("/")
-            self._handle_output_transition(user, output_id, "approve", comment=fields.get("comment", ""))
+            self._handle_output_transition(
+                user,
+                output_id,
+                "approve",
+                comment=fields.get("comment", ""),
+                next_path=fields.get("next", ""),
+            )
             return
         if path.startswith("/outputs/") and path.endswith("/return"):
             output_id = path[len("/outputs/") : -len("/return")].strip("/")
-            self._handle_output_transition(user, output_id, "return", comment=fields.get("comment", ""))
+            self._handle_output_transition(
+                user,
+                output_id,
+                "return",
+                comment=fields.get("comment", ""),
+                next_path=fields.get("next", ""),
+            )
             return
 
         self.send_error(404, "Not Found")
@@ -2762,6 +2867,26 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             return
         self.app.redirect(self, f"/outputs/{output.output_id}")
 
+    def _handle_import_upload(self, user: WebUser) -> None:
+        try:
+            draft, original_name = self._read_uploaded_document()
+            if draft is None:
+                raise ValueError("未能识别上传文档中的有效文本。")
+            output = self.app._build_output_from_document_draft(draft, user)
+        except (ValueError, KeyError, PermissionError) as exc:
+            self._send_html("Import", self.app.render_import_page(user, error=str(exc)), status=400)
+            return
+        notice = f"已从 {original_name or draft.source_name or '上传文档'} 识别出可编辑草稿，请确认后提交。"
+        form_html = self.app.render_output_form(
+            user,
+            output,
+            notice=notice,
+            form_title="文档识别结果",
+            submit_label="提交审核",
+            prefill_mode=True,
+        )
+        self._send_html("文档识别结果", form_html)
+
     def _handle_output_edit(
         self,
         user: WebUser,
@@ -2852,7 +2977,15 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             return
         self.app.redirect(self, "/outputs")
 
-    def _handle_output_transition(self, user: WebUser, output_id: str, action: str, *, comment: str = "") -> None:
+    def _handle_output_transition(
+        self,
+        user: WebUser,
+        output_id: str,
+        action: str,
+        *,
+        comment: str = "",
+        next_path: str = "",
+    ) -> None:
         try:
             if action == "submit":
                 self.app.repository.submit_output(output_id, actor_role=user.role, actor_member_id=user.member_id)
@@ -2880,7 +3013,29 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 return
             self._send_html(output.title, self.app.render_output_detail(user, output, notice=str(exc)), status=400)
             return
-        self.app.redirect(self, f"/outputs/{output_id}")
+        if not next_path and action in {"approve", "return"}:
+            next_path = "/reviews" if user.role in {Role.ADMIN, Role.PI} else f"/outputs/{output_id}"
+        self.app.redirect(self, next_path or f"/outputs/{output_id}")
+
+    def _read_uploaded_document(self) -> Tuple[Optional[DocumentImportDraft], str]:
+        content_type = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in content_type:
+            raise ValueError("上传文档请求必须使用 multipart/form-data。")
+        env = {
+            "REQUEST_METHOD": "POST",
+            "CONTENT_TYPE": content_type,
+            "CONTENT_LENGTH": self.headers.get("Content-Length", "0"),
+        }
+        form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ=env, keep_blank_values=True)
+        item = form["document_file"] if "document_file" in form else None
+        if item is None or not getattr(item, "filename", ""):
+            raise ValueError("请选择要上传的文档。")
+        file_name = item.filename or "document"
+        file_bytes = item.file.read()
+        if not isinstance(file_bytes, (bytes, bytearray)):
+            raise ValueError("上传文档读取失败。")
+        draft = infer_document_draft(file_name, bytes(file_bytes))
+        return draft, file_name
 
     def _logout(self) -> None:
         token = self.app._get_cookie(self, SESSION_COOKIE_NAME)

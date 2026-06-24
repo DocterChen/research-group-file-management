@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from html import unescape
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
+from zipfile import ZipFile
 
 try:
     import requests
@@ -14,6 +17,14 @@ try:
     REQUESTS_AVAILABLE = True
 except ImportError:
     REQUESTS_AVAILABLE = False
+
+try:  # Optional PDF support for uploaded documents.
+    from pypdf import PdfReader  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    try:
+        from PyPDF2 import PdfReader  # type: ignore
+    except ImportError:  # pragma: no cover - optional dependency
+        PdfReader = None
 
 
 @dataclass
@@ -49,6 +60,20 @@ class PatentData:
     abstract: Optional[str] = None
     status: Optional[str] = None
     url: Optional[str] = None
+
+
+@dataclass
+class DocumentImportDraft:
+    """识别上传文档后的草稿结果。"""
+
+    output_type: str
+    title: str
+    year: Optional[int] = None
+    summary: str = ""
+    article: Optional[ArticleData] = None
+    patent: Optional[PatentData] = None
+    source_name: str = ""
+    source_text: str = ""
 
 
 class DataFetcher:
@@ -306,14 +331,25 @@ class DataFetcher:
 
     def fetch_patent_by_number(self, patent_number: str) -> Optional[PatentData]:
         """按专利号或申请号抓取专利元数据。"""
-        patent_number = patent_number.strip()
+        patent_number = self._normalize_patent_query(patent_number)
         if not patent_number:
             return None
 
         try:
             results = self.search_patent_cnipa(patent_number, limit=1)
             if not results:
-                return None
+                return PatentData(
+                    title=patent_number,
+                    patent_number=patent_number,
+                    application_number=patent_number,
+                    country_code=self._guess_country_code(patent_number),
+                    kind_code="",
+                    filing_date=None,
+                    publication_date=None,
+                    abstract=None,
+                    status="待补充",
+                    url=f"https://patents.google.com/patent/{quote(patent_number, safe='')}",
+                )
             item = results[0]
             inventors = self._collect_names(item, "inventor")
             assignees = self._collect_names(item, "assignee")
@@ -334,6 +370,21 @@ class DataFetcher:
             )
         except Exception:
             return None
+
+    @staticmethod
+    def _normalize_patent_query(query: str) -> str:
+        normalized = query.strip()
+        for prefix in ("专利号：", "专利号:", "申请号：", "申请号:", "公开号：", "公开号:", "patent number:", "application number:"):
+            if normalized.lower().startswith(prefix.lower()):
+                normalized = normalized[len(prefix) :].strip()
+                break
+        normalized = re.sub(r"\s+", "", normalized)
+        return normalized
+
+    @staticmethod
+    def _guess_country_code(value: str) -> str:
+        match = re.match(r"^([A-Z]{1,3})", value.upper())
+        return match.group(1) if match else ""
 
     def _extract_xml_tag(self, xml: str, tag: str) -> Optional[str]:
         """从XML中提取单个标签的内容。"""
@@ -376,6 +427,236 @@ class DataFetcher:
         if isinstance(org_values, list):
             names.extend(str(value).strip() for value in org_values if str(value).strip())
         return names
+
+
+def extract_document_text(file_name: str, content: bytes) -> str:
+    """尽最大可能从上传文档中提取纯文本。"""
+    suffix = Path(file_name).suffix.lower()
+    if suffix == ".docx":
+        return _extract_docx_text(content)
+    if suffix == ".pdf":
+        return _extract_pdf_text(content)
+    if suffix in {".html", ".htm", ".xml"}:
+        return _strip_tags(_decode_bytes(content))
+    return _decode_bytes(content)
+
+
+def infer_document_draft(file_name: str, content: bytes, *, email: Optional[str] = None) -> Optional[DocumentImportDraft]:
+    """根据上传文档自动识别成果草稿。"""
+    text = extract_document_text(file_name, content)
+    if not text.strip():
+        return None
+
+    source_name = Path(file_name).name
+    title = _detect_title(text, source_name)
+    year = _detect_year(text)
+    summary = _detect_summary(text)
+    doi = _detect_doi(text)
+    pmid = _detect_pmid(text)
+    patent_number = _detect_patent_number(text)
+
+    if doi or pmid:
+        article = fetch_article_metadata(doi=doi, pmid=pmid, email=email)
+        if article is not None:
+            return DocumentImportDraft(
+                output_type="article",
+                title=article.title or title,
+                year=article.year or year,
+                summary=article.abstract or summary,
+                article=article,
+                source_name=source_name,
+                source_text=text,
+            )
+        article = ArticleData(
+            title=title,
+            authors=[],
+            year=year,
+            doi=doi,
+            pmid=pmid,
+            abstract=summary or None,
+        )
+        return DocumentImportDraft(
+            output_type="article",
+            title=title,
+            year=year,
+            summary=summary,
+            article=article,
+            source_name=source_name,
+            source_text=text,
+        )
+
+    if patent_number:
+        fetcher = DataFetcher(email=email) if REQUESTS_AVAILABLE else None
+        patent = fetcher.fetch_patent_by_number(patent_number) if fetcher else None
+        if patent is None:
+            patent = PatentData(
+                title=title or patent_number,
+                patent_number=patent_number,
+                application_number=patent_number,
+                country_code=DataFetcher._guess_country_code(patent_number),
+                kind_code="",
+                abstract=summary or None,
+                status="待补充",
+                url=f"https://patents.google.com/patent/{quote(patent_number, safe='')}",
+            )
+        return DocumentImportDraft(
+            output_type="patent",
+            title=patent.title or title or patent_number,
+            year=year,
+            summary=patent.abstract or summary,
+            patent=patent,
+            source_name=source_name,
+            source_text=text,
+        )
+
+    article = ArticleData(
+        title=title,
+        authors=[],
+        year=year,
+        abstract=summary or None,
+    )
+    return DocumentImportDraft(
+        output_type="article",
+        title=title,
+        year=year,
+        summary=summary,
+        article=article,
+        source_name=source_name,
+        source_text=text,
+    )
+
+
+def _decode_bytes(content: bytes) -> str:
+    for encoding in ("utf-8", "utf-8-sig", "gb18030", "gbk", "utf-16"):
+        try:
+            return content.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return content.decode("utf-8", errors="ignore")
+
+
+def _extract_docx_text(content: bytes) -> str:
+    from io import BytesIO
+    from xml.etree import ElementTree as ET
+
+    try:
+        with ZipFile(BytesIO(content)) as archive:
+            xml = archive.read("word/document.xml")
+    except Exception:
+        return _decode_bytes(content)
+    try:
+        root = ET.fromstring(xml)
+    except Exception:
+        return _decode_bytes(content)
+    namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    parts = []
+    for node in root.findall(".//w:t", namespace):
+        if node.text:
+            parts.append(node.text)
+    return "\n".join(parts)
+
+
+def _extract_pdf_text(content: bytes) -> str:
+    if PdfReader is None:
+        return _decode_bytes(content)
+    try:
+        from io import BytesIO
+
+        reader = PdfReader(BytesIO(content))
+        parts: list[str] = []
+        for page in reader.pages:
+            extracted = page.extract_text() or ""
+            if extracted.strip():
+                parts.append(extracted)
+        return "\n".join(parts) or _decode_bytes(content)
+    except Exception:
+        return _decode_bytes(content)
+
+
+def _strip_tags(text: str) -> str:
+    cleaned = re.sub(r"<[^>]+>", "\n", text)
+    return unescape(cleaned)
+
+
+def _detect_title(text: str, fallback_name: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    noisy_prefixes = (
+        "doi",
+        "pmid",
+        "abstract",
+        "摘要",
+        "关键词",
+        "key words",
+        "keywords",
+        "专利号",
+        "申请号",
+        "publication",
+    )
+    for line in lines[:20]:
+        normalized = line.lower()
+        if any(normalized.startswith(prefix) for prefix in noisy_prefixes):
+            continue
+        if 6 <= len(line) <= 140:
+            return line
+    return Path(fallback_name).stem or fallback_name
+
+
+def _detect_year(text: str) -> Optional[int]:
+    for match in re.finditer(r"\b(19|20)\d{2}\b", text):
+        year = int(match.group(0))
+        if 1900 <= year <= 2100:
+            return year
+    return None
+
+
+def _detect_summary(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines()]
+    for index, line in enumerate(lines):
+        normalized = line.lower()
+        if normalized in {"abstract", "摘要", "abstrakt"} or normalized.startswith("abstract:") or normalized.startswith("摘要："):
+            collected: list[str] = []
+            for follow in lines[index + 1 : index + 12]:
+                if not follow:
+                    if collected:
+                        break
+                    continue
+                if re.match(r"^[A-Z0-9一二三四五六七八九十]+\s*[\.:：]?", follow) and collected:
+                    break
+                collected.append(follow)
+            summary = " ".join(collected).strip()
+            if summary:
+                return summary
+    return ""
+
+
+def _detect_doi(text: str) -> str:
+    match = re.search(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b", text, re.IGNORECASE)
+    if not match:
+        return ""
+    return match.group(0).rstrip(".,;：: )]")
+
+
+def _detect_pmid(text: str) -> str:
+    match = re.search(r"\bPMID[:：\s]*([0-9]{6,10})\b", text, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    match = re.search(r"\bpubmed[:：\s#]*([0-9]{6,10})\b", text, re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def _detect_patent_number(text: str) -> str:
+    labeled_patterns = [
+        r"(?:专利号|申请号|公开号|patent number|application number|publication number)[:：\s]*([A-Z]{0,3}\d[\dA-Z.\-\/]{5,})",
+        r"\b(CN\d{8,14}[A-Z]?)\b",
+        r"\b(US\d{7,15}[A-Z]?)\b",
+        r"\b(WO\d{8,15}[A-Z]?)\b",
+        r"\b(EP\d{7,15}[A-Z]?)\b",
+    ]
+    for pattern in labeled_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return ""
 
 
 def fetch_article_metadata(
