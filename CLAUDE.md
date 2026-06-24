@@ -10,3 +10,4 @@
 - 引用文件用 Markdown 链接，必要时带行号：`[file.md:42](path/file.md#L42)`
 - 复杂任务用 TodoWrite；改代码前先读文件，优先精确编辑
 - 避免无关重构；修改 `AGENTS.md` 后更新 `CHANGELOG.md`
+- 与 `AGENTS.md` 保持一致：涉及 UI、权限、抓取、认证和数据流时，优先测试先行并完成运行验证
