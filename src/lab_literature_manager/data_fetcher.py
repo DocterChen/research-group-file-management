@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Optional
+from html import unescape
+from typing import Any, Optional
+from urllib.parse import quote
 
 try:
     import requests
@@ -36,13 +38,17 @@ class PatentData:
     """从外部数据库抓取的专利数据。"""
 
     title: str
-    application_number: str
     inventors: list[str]
     applicants: list[str]
+    patent_number: str = ""
+    application_number: str = ""
+    country_code: str = ""
+    kind_code: str = ""
     filing_date: Optional[str] = None
     publication_date: Optional[str] = None
     abstract: Optional[str] = None
     status: Optional[str] = None
+    url: Optional[str] = None
 
 
 class DataFetcher:
@@ -75,13 +81,13 @@ class DataFetcher:
         Returns:
             抓取的文章数据，如果失败返回None
         """
-        doi = doi.strip()
+        doi = self._normalize_doi(doi)
         if not doi:
             return None
 
         try:
             # CrossRef API
-            url = f"https://api.crossref.org/works/{doi}"
+            url = f"https://api.crossref.org/works/{quote(doi, safe='')}"
             response = self.session.get(url, timeout=10)
 
             if response.status_code != 200:
@@ -104,27 +110,20 @@ class DataFetcher:
             journal_list = message.get("container-title", [])
             journal = journal_list[0] if journal_list else None
 
-            # 提取年份
-            published = message.get("published-print") or message.get("published-online")
-            year = None
-            if published and "date-parts" in published:
-                date_parts = published["date-parts"][0]
-                if date_parts:
-                    year = date_parts[0]
+            year = self._extract_crossref_year(message)
 
             # 提取ISSN
             issn_list = message.get("ISSN", [])
             issn = issn_list[0] if issn_list else None
 
-            # 提取摘要（如果有）
-            abstract = message.get("abstract", None)
+            abstract = self._clean_crossref_text(message.get("abstract"))
 
             article = ArticleData(
-                title=message.get("title", [""])[0],
+                title=self._first_text(message.get("title")),
                 authors=authors,
                 journal=journal,
                 year=year,
-                doi=doi,
+                doi=self._normalize_doi(str(message.get("DOI", doi))),
                 abstract=abstract,
                 issn=issn,
                 volume=message.get("volume"),
@@ -137,6 +136,46 @@ class DataFetcher:
 
         except Exception:
             return None
+
+    @staticmethod
+    def _normalize_doi(doi: str) -> str:
+        normalized = doi.strip()
+        for prefix in ("https://doi.org/", "http://doi.org/", "doi:"):
+            if normalized.lower().startswith(prefix):
+                normalized = normalized[len(prefix) :]
+                break
+        return normalized.strip()
+
+    @staticmethod
+    def _first_text(value: Any) -> str:
+        if isinstance(value, list) and value:
+            return str(value[0]).strip()
+        if isinstance(value, str):
+            return value.strip()
+        return ""
+
+    @staticmethod
+    def _clean_crossref_text(value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        cleaned = unescape(value)
+        for token in ("<jats:p>", "</jats:p>", "<p>", "</p>"):
+            cleaned = cleaned.replace(token, "")
+        cleaned = cleaned.strip()
+        return cleaned or None
+
+    @staticmethod
+    def _extract_crossref_year(message: dict[str, Any]) -> Optional[int]:
+        for key in ("published-print", "published-online", "published", "issued", "created"):
+            published = message.get(key)
+            if isinstance(published, dict) and "date-parts" in published:
+                date_parts = published.get("date-parts") or []
+                if date_parts and date_parts[0]:
+                    try:
+                        return int(date_parts[0][0])
+                    except (TypeError, ValueError):
+                        return None
+        return None
 
     def fetch_by_pmid(self, pmid: str, rate_limit: float = 0.34) -> Optional[ArticleData]:
         """通过PMID从PubMed抓取文章数据。
@@ -222,21 +261,79 @@ class DataFetcher:
             return None
 
     def search_patent_cnipa(self, query: str, limit: int = 10) -> list[dict]:
-        """搜索中国专利（国知局）。
+        """搜索专利数据。
 
-        注意：这是一个简化版本，实际的国知局API需要认证和更复杂的请求。
-        这里提供一个框架，实际使用时需要根据具体API文档实现。
-
-        Args:
-            query: 搜索关键词
-            limit: 返回结果数量限制
-
-        Returns:
-            专利摘要列表
+        当前优先尝试 PatentsView 公开接口；若不可用则返回空列表。
         """
-        # 实际实现需要国知局API密钥和详细文档
-        # 这里返回空列表作为占位
-        return []
+        query = query.strip()
+        if not query:
+            return []
+
+        try:
+            payload = {
+                "q": {
+                    "_or": [
+                        {"patent_number": query},
+                        {"patent_application_number": query},
+                        {"patent_title": query},
+                    ]
+                },
+                "f": [
+                    "patent_number",
+                    "patent_title",
+                    "patent_date",
+                    "patent_application_date",
+                    "patent_type",
+                    "patent_abstract",
+                    "patent_country",
+                    "patent_kind",
+                    "inventor_first_name",
+                    "inventor_last_name",
+                    "assignee_organization",
+                ],
+                "o": {"per_page": max(1, min(limit, 20))},
+            }
+            response = self.session.post("https://api.patentsview.org/patents/query", json=payload, timeout=15)
+            if response.status_code != 200:
+                return []
+            data = response.json()
+            patents = []
+            for item in data.get("patents", []):
+                patents.append(item)
+            return patents[:limit]
+        except Exception:
+            return []
+
+    def fetch_patent_by_number(self, patent_number: str) -> Optional[PatentData]:
+        """按专利号或申请号抓取专利元数据。"""
+        patent_number = patent_number.strip()
+        if not patent_number:
+            return None
+
+        try:
+            results = self.search_patent_cnipa(patent_number, limit=1)
+            if not results:
+                return None
+            item = results[0]
+            inventors = self._collect_names(item, "inventor")
+            assignees = self._collect_names(item, "assignee")
+            title = str(item.get("patent_title", "")).strip()
+            return PatentData(
+                title=title or patent_number,
+                patent_number=str(item.get("patent_number", patent_number)),
+                application_number=str(item.get("patent_application_number", patent_number)),
+                country_code=str(item.get("patent_country", "")),
+                kind_code=str(item.get("patent_kind", "")),
+                inventors=inventors,
+                applicants=assignees,
+                filing_date=str(item.get("patent_application_date", "")) or None,
+                publication_date=str(item.get("patent_date", "")) or None,
+                abstract=str(item.get("patent_abstract", "")) or None,
+                status=str(item.get("patent_type", "")) or None,
+                url=f"https://patents.google.com/patent/{item.get('patent_number', patent_number)}",
+            )
+        except Exception:
+            return None
 
     def _extract_xml_tag(self, xml: str, tag: str) -> Optional[str]:
         """从XML中提取单个标签的内容。"""
@@ -262,6 +359,23 @@ class DataFetcher:
             if content:
                 results.append(content)
         return results
+
+    def _collect_names(self, item: dict[str, Any], prefix: str) -> list[str]:
+        names: list[str] = []
+        first_key = f"{prefix}_first_name"
+        last_key = f"{prefix}_last_name"
+        org_key = f"{prefix}_organization"
+        first_values = item.get(first_key, [])
+        last_values = item.get(last_key, [])
+        org_values = item.get(org_key, [])
+        if isinstance(first_values, list) and isinstance(last_values, list):
+            for first, last in zip(first_values, last_values):
+                full_name = " ".join(part for part in [str(first).strip(), str(last).strip()] if part)
+                if full_name:
+                    names.append(full_name)
+        if isinstance(org_values, list):
+            names.extend(str(value).strip() for value in org_values if str(value).strip())
+        return names
 
 
 def fetch_article_metadata(

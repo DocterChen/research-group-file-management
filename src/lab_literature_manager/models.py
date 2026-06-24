@@ -159,6 +159,71 @@ class ArticleMetadata:
 
 
 @dataclass(frozen=True)
+class PatentMetadata:
+    """Patent-specific metadata for patent outputs."""
+
+    patent_number: str = ""
+    application_number: str = ""
+    title: str = ""
+    country_code: str = ""
+    kind_code: str = ""
+    inventors: List[str] = field(default_factory=list)
+    assignees: List[str] = field(default_factory=list)
+    application_date: str = ""
+    publication_date: str = ""
+    status: str = ""
+    abstract: str = ""
+    url: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "patent_number", _clean_text(self.patent_number))
+        object.__setattr__(self, "application_number", _clean_text(self.application_number))
+        object.__setattr__(self, "title", _clean_text(self.title))
+        object.__setattr__(self, "country_code", _clean_text(self.country_code))
+        object.__setattr__(self, "kind_code", _clean_text(self.kind_code))
+        object.__setattr__(self, "inventors", _unique_cleaned(self.inventors))
+        object.__setattr__(self, "assignees", _unique_cleaned(self.assignees))
+        object.__setattr__(self, "application_date", _clean_text(self.application_date))
+        object.__setattr__(self, "publication_date", _clean_text(self.publication_date))
+        object.__setattr__(self, "status", _clean_text(self.status))
+        object.__setattr__(self, "abstract", _clean_text(self.abstract))
+        object.__setattr__(self, "url", _clean_text(self.url))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "patent_number": self.patent_number,
+            "application_number": self.application_number,
+            "title": self.title,
+            "country_code": self.country_code,
+            "kind_code": self.kind_code,
+            "inventors": list(self.inventors),
+            "assignees": list(self.assignees),
+            "application_date": self.application_date,
+            "publication_date": self.publication_date,
+            "status": self.status,
+            "abstract": self.abstract,
+            "url": self.url,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PatentMetadata":
+        return cls(
+            patent_number=str(data.get("patent_number", "")),
+            application_number=str(data.get("application_number", "")),
+            title=str(data.get("title", "")),
+            country_code=str(data.get("country_code", "")),
+            kind_code=str(data.get("kind_code", "")),
+            inventors=list(data.get("inventors", [])),
+            assignees=list(data.get("assignees", [])),
+            application_date=str(data.get("application_date", "")),
+            publication_date=str(data.get("publication_date", "")),
+            status=str(data.get("status", "")),
+            abstract=str(data.get("abstract", "")),
+            url=str(data.get("url", "")),
+        )
+
+
+@dataclass(frozen=True)
 class Member:
     """Research group member."""
 
@@ -269,6 +334,7 @@ class ResearchOutput:
     notes: str = ""
     review_status: ReviewStatus = ReviewStatus.DRAFT
     article: Optional[ArticleMetadata] = None
+    patent: Optional[PatentMetadata] = None
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
 
@@ -300,6 +366,10 @@ class ResearchOutput:
                 raise ValueError("Article outputs must include article metadata.")
         elif self.article is not None:
             raise ValueError("Only article outputs may include article metadata.")
+        if self.output_type == OutputType.PATENT and self.patent is not None:
+            object.__setattr__(self, "patent", self.patent)
+        elif self.patent is not None and self.output_type != OutputType.PATENT:
+            raise ValueError("Only patent outputs may include patent metadata.")
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -315,6 +385,7 @@ class ResearchOutput:
             "notes": self.notes,
             "review_status": self.review_status.value,
             "article": self.article.to_dict() if self.article else None,
+            "patent": self.patent.to_dict() if self.patent else None,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -335,6 +406,7 @@ class ResearchOutput:
             notes=str(data.get("notes", "")),
             review_status=ReviewStatus(str(data.get("review_status", ReviewStatus.DRAFT.value))),
             article=ArticleMetadata.from_dict(article) if isinstance(article, dict) else None,
+            patent=PatentMetadata.from_dict(data["patent"]) if isinstance(data.get("patent"), dict) else None,
             created_at=str(data.get("created_at", utc_now_iso())),
             updated_at=str(data.get("updated_at", data.get("created_at", utc_now_iso()))),
         )
