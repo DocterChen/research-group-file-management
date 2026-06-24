@@ -1,9 +1,28 @@
 ```
+问题：
+1.在管理员界面，审核工作台增加提示有多少待审核。
+2.去掉示例数据的具体名称，用某某表示
+3.
+```
+
+
+
+```
 问题
 1.新增一个上传文档然后自动识别相关字段直接填入的功能？
 2.成果管理界面，点击通过审核后界面应该跳转，而不是停留在这里
 3.专利的拉取还有问题。
 4.登陆界面的姓名改为账号。
+5.登陆出现问题：PYTHONPATH=src python3 -m lab_literature_manager.cli web serve
+Traceback (most recent call last):
+  File "<frozen runpy>", line 189, in _run_module_as_main
+  File "<frozen runpy>", line 112, in _get_module_details
+  File "/Users/chenhang/Documents/Codex/research-group-file-management/src/lab_literature_manager/__init__.py", line 17, in <module>
+    from .web import LocalAuthStore, create_web_server
+  File "/Users/chenhang/Documents/Codex/research-group-file-management/src/lab_literature_manager/web.py", line 6, in <module>
+    import cgi
+ModuleNotFoundError: No module named 'cgi'
+全程按awesome-code  skill的规范，如果你有问题或者更好的方案，自己决定，不要问我。最后要保证程序完美执行。把这个规则写入到/AGENTS.md。
 ```
 
 

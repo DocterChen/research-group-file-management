@@ -335,21 +335,27 @@ class DataFetcher:
         if not patent_number:
             return None
 
+        # 创建降级响应（当 API 不可用时使用）
+        fallback_data = PatentData(
+            title=patent_number,
+            patent_number=patent_number,
+            application_number=patent_number,
+            country_code=self._guess_country_code(patent_number),
+            kind_code="",
+            inventors=[],
+            applicants=[],
+            filing_date=None,
+            publication_date=None,
+            abstract=None,
+            status="待补充",
+            url=f"https://patents.google.com/patent/{quote(patent_number, safe='')}",
+        )
+
         try:
             results = self.search_patent_cnipa(patent_number, limit=1)
             if not results:
-                return PatentData(
-                    title=patent_number,
-                    patent_number=patent_number,
-                    application_number=patent_number,
-                    country_code=self._guess_country_code(patent_number),
-                    kind_code="",
-                    filing_date=None,
-                    publication_date=None,
-                    abstract=None,
-                    status="待补充",
-                    url=f"https://patents.google.com/patent/{quote(patent_number, safe='')}",
-                )
+                return fallback_data
+
             item = results[0]
             inventors = self._collect_names(item, "inventor")
             assignees = self._collect_names(item, "assignee")
@@ -369,7 +375,8 @@ class DataFetcher:
                 url=f"https://patents.google.com/patent/{item.get('patent_number', patent_number)}",
             )
         except Exception:
-            return None
+            # API 调用失败时返回降级数据，而不是 None
+            return fallback_data
 
     @staticmethod
     def _normalize_patent_query(query: str) -> str:

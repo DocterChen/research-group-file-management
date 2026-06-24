@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import cgi
 import hashlib
 import hmac
 import html
@@ -14,6 +13,8 @@ import threading
 from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from email import message_from_binary_file
+from email.message import Message
 from io import BytesIO
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1550,8 +1551,10 @@ class WebApplication:
                 f'<form method="post" action="/outputs/{html.escape(output.output_id)}/submit" style="display:inline-block;"><button class="button primary" type="submit">提交审核</button></form>'
             )
         if can_perform(current_user.role, Permission.REVIEW, output=output, actor_member_id=current_user.member_id):
+            # 审核后跳转到审核工作台（管理员/PI）或成果列表（普通用户）
+            next_page = "/reviews" if current_user.role in {Role.ADMIN, Role.PI} else "/outputs"
             actions.append(
-                f'<form method="post" action="/outputs/{html.escape(output.output_id)}/approve" style="display:inline-block;"><input type="hidden" name="comment" value="通过Web界面审核通过" /><button class="button secondary" type="submit">通过审核</button></form>'
+                f'<form method="post" action="/outputs/{html.escape(output.output_id)}/approve" style="display:inline-block;"><input type="hidden" name="comment" value="通过Web界面审核通过" /><input type="hidden" name="next" value="{html.escape(next_page)}" /><button class="button secondary" type="submit">通过审核</button></form>'
             )
         body = f"""
         <section class="stack">
@@ -2474,7 +2477,7 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 if existing is not None and existing.account_status == ACCOUNT_STATUS_PENDING:
                     self._send_html("登录", self.app.render_login_page("账号正在等待管理员审核。"), status=403)
                     return
-                self._send_html("登录", self.app.render_login_page("姓名或密码错误。"), status=401)
+                self._send_html("登录", self.app.render_login_page("账号或密码错误。"), status=401)
                 return
             token = self.app.sessions.create(user.username)
             self.send_response(303)
@@ -3021,19 +3024,71 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type:
             raise ValueError("上传文档请求必须使用 multipart/form-data。")
-        env = {
-            "REQUEST_METHOD": "POST",
-            "CONTENT_TYPE": content_type,
-            "CONTENT_LENGTH": self.headers.get("Content-Length", "0"),
-        }
-        form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ=env, keep_blank_values=True)
-        item = form["document_file"] if "document_file" in form else None
-        if item is None or not getattr(item, "filename", ""):
+
+        # 解析 boundary
+        boundary = None
+        for part in content_type.split(";"):
+            part = part.strip()
+            if part.startswith("boundary="):
+                boundary = part[9:].strip('"')
+                break
+
+        if not boundary:
+            raise ValueError("multipart/form-data 缺少 boundary。")
+
+        # 读取请求体
+        content_length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(content_length)
+
+        # 解析 multipart 数据
+        file_name = None
+        file_bytes = None
+
+        # 简单的 multipart 解析
+        boundary_bytes = f"--{boundary}".encode()
+        parts = body.split(boundary_bytes)
+
+        for part in parts:
+            if not part or part == b"--\r\n" or part == b"--":
+                continue
+
+            # 分离头部和内容
+            if b"\r\n\r\n" in part:
+                headers_raw, content = part.split(b"\r\n\r\n", 1)
+            elif b"\n\n" in part:
+                headers_raw, content = part.split(b"\n\n", 1)
+            else:
+                continue
+
+            # 解析头部
+            headers_text = headers_raw.decode("utf-8", errors="ignore")
+            if 'name="document_file"' in headers_text:
+                # 提取文件名
+                for line in headers_text.split("\n"):
+                    if "filename=" in line:
+                        # 提取 filename
+                        filename_start = line.find('filename="')
+                        if filename_start != -1:
+                            filename_start += 10
+                            filename_end = line.find('"', filename_start)
+                            if filename_end != -1:
+                                file_name = line[filename_start:filename_end]
+
+                # 移除尾部的 \r\n
+                if content.endswith(b"\r\n"):
+                    content = content[:-2]
+                elif content.endswith(b"\n"):
+                    content = content[:-1]
+
+                file_bytes = content
+                break
+
+        if file_name is None or file_bytes is None:
             raise ValueError("请选择要上传的文档。")
-        file_name = item.filename or "document"
-        file_bytes = item.file.read()
+
         if not isinstance(file_bytes, (bytes, bytearray)):
             raise ValueError("上传文档读取失败。")
+
         draft = infer_document_draft(file_name, bytes(file_bytes))
         return draft, file_name
 
