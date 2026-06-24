@@ -27,6 +27,7 @@ from lab_literature_manager import (
     can_perform,
 )
 from lab_literature_manager.constants import DEFAULT_DATA_DIR
+from lab_literature_manager.models import output_type_label, review_status_label
 
 
 class ResearchOutputModelTests(unittest.TestCase):
@@ -75,6 +76,10 @@ class PermissionAndWorkflowTests(unittest.TestCase):
         self.assertTrue(can_perform(Role.MEMBER, Permission.EDIT, output=output, actor_member_id="alice"))
         self.assertFalse(can_perform(Role.MEMBER, Permission.REVIEW, output=output, actor_member_id="alice"))
         self.assertTrue(can_perform(Role.PI, Permission.REVIEW, output=output, actor_member_id="pi-1"))
+        self.assertTrue(can_perform(Role.ADMIN, Permission.MANAGE_PERMISSIONS))
+        self.assertTrue(can_perform(Role.ADMIN, Permission.DELETE, output=output, actor_member_id="admin"))
+        self.assertTrue(can_perform(Role.MEMBER, Permission.VIEW, output=output, actor_member_id="alice"))
+        self.assertFalse(can_perform(Role.MEMBER, Permission.VIEW, output=output, actor_member_id="bob"))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             repository = ResearchRepository(tmp_dir)
@@ -95,6 +100,65 @@ class PermissionAndWorkflowTests(unittest.TestCase):
 
 
 class RepositoryTests(unittest.TestCase):
+    def test_category_labels_and_generated_output_ids_are_chinese_friendly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repository = ResearchRepository(tmp_dir)
+            repository.add_member(Member(member_id="alice", name="Alice", role=Role.MEMBER))
+            first_id = repository.generate_output_id(OutputType.ARTICLE, year=2026)
+            self.assertEqual(first_id, "LW-2026-001")
+            self.assertEqual(output_type_label(OutputType.ARTICLE), "论文")
+            self.assertEqual(output_type_label(OutputType.SOFTWARE_COPYRIGHT), "软件著作权")
+            self.assertEqual(review_status_label(ReviewStatus.DRAFT), "草稿")
+
+            repository.add_output(
+                ResearchOutput(
+                    output_id=first_id,
+                    title="Cancer Atlas",
+                    output_type=OutputType.ARTICLE,
+                    owner_member_ids=["alice", "外部合作者"],
+                    participant_member_ids=["未建档成员"],
+                    year=2026,
+                    article=ArticleMetadata(article_type="review"),
+                ),
+                actor_role=Role.MEMBER,
+                actor_member_id="alice",
+            )
+
+            self.assertEqual(repository.generate_output_id(OutputType.ARTICLE, year=2026), "LW-2026-002")
+            self.assertEqual(repository.generate_output_id(OutputType.PATENT, year=2026), "ZL-2026-001")
+
+    def test_member_output_scope_only_lists_owned_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repository = ResearchRepository(tmp_dir)
+            repository.add_member(Member(member_id="alice", name="Alice", role=Role.MEMBER))
+            repository.add_member(Member(member_id="bob", name="Bob", role=Role.MEMBER))
+            repository.add_output(
+                ResearchOutput(
+                    output_id="LW-2026-001",
+                    title="Alice Output",
+                    output_type=OutputType.ARTICLE,
+                    owner_member_ids=["alice"],
+                    article=ArticleMetadata(article_type="review"),
+                ),
+                actor_role=Role.MEMBER,
+                actor_member_id="alice",
+            )
+            repository.add_output(
+                ResearchOutput(
+                    output_id="ZL-2026-001",
+                    title="Bob Output",
+                    output_type=OutputType.PATENT,
+                    owner_member_ids=["bob"],
+                ),
+                actor_role=Role.MEMBER,
+                actor_member_id="bob",
+            )
+
+            alice_outputs = repository.list_outputs_for_actor(Role.MEMBER, "alice")
+            admin_outputs = repository.list_outputs_for_actor(Role.ADMIN, "admin")
+            self.assertEqual([output.output_id for output in alice_outputs], ["LW-2026-001"])
+            self.assertEqual({output.output_id for output in admin_outputs}, {"LW-2026-001", "ZL-2026-001"})
+
     def test_repository_round_trip_summary_and_export(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             repository = ResearchRepository(tmp_dir)

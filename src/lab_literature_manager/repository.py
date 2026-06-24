@@ -20,6 +20,7 @@ from .models import (
     ReviewRecord,
     ReviewStatus,
     Role,
+    output_type_id_prefix,
 )
 from .permissions import ensure_permission
 
@@ -108,7 +109,6 @@ class ResearchRepository:
         projects = self.list_projects()
         if any(existing.project_id == project.project_id for existing in projects):
             raise ValueError(f"Project already exists: {project.project_id}")
-        self._validate_member_ids(project.owner_member_ids, label="project owners")
         projects.append(project)
         self._save_entities("projects", projects, sort_key=lambda item: item.project_id.lower())
 
@@ -116,7 +116,6 @@ class ResearchRepository:
         projects = self.list_projects()
         if not any(existing.project_id == project.project_id for existing in projects):
             raise KeyError(f"Project not found: {project.project_id}")
-        self._validate_member_ids(project.owner_member_ids, label="project owners")
         updated_projects = [project if existing.project_id == project.project_id else existing for existing in projects]
         self._save_entities("projects", updated_projects, sort_key=lambda item: item.project_id.lower())
 
@@ -155,6 +154,27 @@ class ResearchRepository:
             outputs = [item for item in outputs if normalized_owner in item.owner_member_ids]
         return outputs
 
+    def list_outputs_for_actor(self, actor_role: Role, actor_member_id: str) -> List[ResearchOutput]:
+        normalized_role = actor_role if isinstance(actor_role, Role) else Role(str(actor_role))
+        if normalized_role in {Role.PI, Role.ADMIN}:
+            return self.list_outputs()
+        normalized_actor = actor_member_id.strip()
+        return [output for output in self.list_outputs() if normalized_actor in output.owner_member_ids]
+
+    def generate_output_id(self, output_type: Union[OutputType, str], *, year: Optional[int] = None) -> str:
+        normalized_type = output_type if isinstance(output_type, OutputType) else OutputType(str(output_type))
+        year_part = str(year) if year is not None else "0000"
+        prefix = output_type_id_prefix(normalized_type)
+        stem = f"{prefix}-{year_part}-"
+        max_sequence = 0
+        for output in self.list_outputs(output_type=normalized_type):
+            if not output.output_id.startswith(stem):
+                continue
+            suffix = output.output_id[len(stem) :]
+            if suffix.isdigit():
+                max_sequence = max(max_sequence, int(suffix))
+        return f"{stem}{max_sequence + 1:03d}"
+
     def get_output(self, output_id: str) -> ResearchOutput:
         normalized_id = output_id.strip()
         for output in self.list_outputs():
@@ -173,8 +193,6 @@ class ResearchRepository:
         outputs = self.list_outputs()
         if any(existing.output_id == output.output_id for existing in outputs):
             raise ValueError(f"Research output already exists: {output.output_id}")
-        self._validate_member_ids(output.owner_member_ids, label="output owners")
-        self._validate_member_ids(output.participant_member_ids, label="output participants")
         self._validate_project_ids(output.project_ids)
         outputs.append(output)
         self._save_entities("outputs", outputs, sort_key=lambda item: item.output_id.lower())
@@ -198,8 +216,6 @@ class ResearchRepository:
         outputs = self.list_outputs()
         if not any(existing.output_id == output.output_id for existing in outputs):
             raise KeyError(f"Research output not found: {output.output_id}")
-        self._validate_member_ids(output.owner_member_ids, label="output owners")
-        self._validate_member_ids(output.participant_member_ids, label="output participants")
         self._validate_project_ids(output.project_ids)
         updated_outputs = [output if existing.output_id == output.output_id else existing for existing in outputs]
         self._save_entities("outputs", updated_outputs, sort_key=lambda item: item.output_id.lower())

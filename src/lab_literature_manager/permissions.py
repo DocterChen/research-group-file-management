@@ -21,23 +21,23 @@ def can_perform(
         permission = Permission(str(permission))
     normalized_actor = actor_member_id.strip()
 
-    if permission == Permission.VIEW:
+    if role in {Role.PI, Role.ADMIN}:
         return True
+    if permission == Permission.VIEW:
+        return output is None or normalized_actor in output.owner_member_ids
     if permission == Permission.EXPORT:
-        return role in {Role.PI, Role.ADMIN}
+        return False
     if permission == Permission.REVIEW:
-        return role in {Role.PI, Role.ADMIN}
+        return False
     if permission == Permission.MANAGE_PERMISSIONS:
-        return role == Role.PI
+        return False
     if permission == Permission.VIEW_AUDIT_LOG:
-        return role in {Role.PI, Role.ADMIN}
+        return False
     if permission in {Permission.DELETE, Permission.ARCHIVE, Permission.UPLOAD_ATTACHMENT}:
-        return role in {Role.PI, Role.ADMIN}
+        return False
     if permission == Permission.DOWNLOAD_ATTACHMENT:
         return role != Role.READONLY
 
-    if role in {Role.PI, Role.ADMIN}:
-        return True
     if role == Role.READONLY:
         return False
 

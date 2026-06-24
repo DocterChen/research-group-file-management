@@ -14,7 +14,7 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from lab_literature_manager.data_fetcher import ArticleData, DataFetcher
-from lab_literature_manager.models import ArticleMetadata, Member, OutputType, Project, ResearchOutput, Role
+from lab_literature_manager.models import ArticleMetadata, Member, OutputType, Project, ResearchOutput, ReviewStatus, Role
 from lab_literature_manager.repository import ResearchRepository
 from lab_literature_manager.web import LocalAuthStore, LocalWebRequestHandler, WebApplication
 
@@ -55,8 +55,9 @@ class WebUiTests(TestCase):
     def test_login_and_dashboard_pages_render(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             app = self._build_app(tmp_dir)
+            app.save_settings(app.load_settings().__class__(workspace_name="马老师课题组"))
             login_html = app.render_login_page()
-            self.assertIn("课题组科研成果管理系统", login_html)
+            self.assertIn("马老师课题组", login_html)
             self.assertIn("姓名", login_html)
             self.assertIn("密码", login_html)
             self.assertIn("/register", login_html)
@@ -71,6 +72,8 @@ class WebUiTests(TestCase):
             self.assertIn("总成果数", dashboard)
             self.assertIn("article-1", dashboard)
             self.assertIn("成员数", dashboard)
+            self.assertIn("论文", dashboard)
+            self.assertIn("导出Excel", dashboard)
 
     def test_output_detail_includes_actions_and_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -81,7 +84,7 @@ class WebUiTests(TestCase):
             detail = app.render_output_detail(admin, output)  # type: ignore[arg-type]
             self.assertIn("提交审核", detail)
             self.assertIn("article-1", detail)
-            self.assertIn("Draft", detail)
+            self.assertIn("草稿", detail)
 
             submit_user = Mock(role=Role.MEMBER, member_id="alice")
             class FakeHandler:
@@ -101,7 +104,71 @@ class WebUiTests(TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             app = WebApplication(data_dir=Path(tmp_dir) / "data", auth_path=Path(tmp_dir) / "auth" / "web_auth.json")
             setup_html = app.render_setup_page()
-            self.assertIn("创建实验室工作区的第一位管理员", setup_html)
+            self.assertIn("工作区名称", setup_html)
+            app.save_settings(app.load_settings().__class__(workspace_name="马老师课题组"))
+            self.assertIn("马老师课题组", app.render_login_page())
+
+    def test_member_pages_only_show_owned_outputs_and_form_supports_manual_people(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app = self._build_app(tmp_dir)
+            app.repository.add_member(Member(member_id="bob", name="Bob Li", role=Role.MEMBER))
+            app.repository.add_output(
+                ResearchOutput(
+                    output_id="ZL-2026-001",
+                    title="Bob Patent",
+                    output_type=OutputType.PATENT,
+                    owner_member_ids=["bob"],
+                    year=2026,
+                ),
+                actor_role=Role.MEMBER,
+                actor_member_id="bob",
+            )
+            alice = app.auth_store.create_user("alice", "MemberPass123", display_name="Alice Zhang", role=Role.MEMBER)
+            bob = app.auth_store.create_user("bob", "MemberPass123", display_name="Bob Li", role=Role.MEMBER)
+
+            alice_outputs = app.render_outputs_page(alice)
+            self.assertIn("Gut Atlas", alice_outputs)
+            self.assertNotIn("Bob Patent", alice_outputs)
+            self.assertNotIn("导出Excel", app.render_dashboard(alice))
+
+            bob_outputs = app.render_outputs_page(bob)
+            self.assertIn("Bob Patent", bob_outputs)
+            self.assertNotIn("Gut Atlas", bob_outputs)
+
+            output_form = app.render_output_form(alice)
+            self.assertIn("论文", output_form)
+            self.assertIn("专利", output_form)
+            self.assertIn("owner_member_ids_manual", output_form)
+            self.assertIn("participant_member_ids_manual", output_form)
+
+    def test_dashboard_approved_metric_uses_chinese_status_label(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app = self._build_app(tmp_dir)
+            admin = app.auth_store.authenticate("admin", "ChangeMe123")
+            output = app.repository.get_output("article-1")
+            app.repository.update_output(
+                ResearchOutput(
+                    output_id=output.output_id,
+                    title=output.title,
+                    output_type=output.output_type,
+                    owner_member_ids=output.owner_member_ids,
+                    participant_member_ids=output.participant_member_ids,
+                    project_ids=output.project_ids,
+                    year=output.year,
+                    keywords=output.keywords,
+                    summary=output.summary,
+                    notes=output.notes,
+                    review_status=ReviewStatus.APPROVED,
+                    article=output.article,
+                    patent=output.patent,
+                    created_at=output.created_at,
+                ),
+                actor_role=Role.ADMIN,
+                actor_member_id="admin",
+            )
+            dashboard = app.render_dashboard(admin)  # type: ignore[arg-type]
+            self.assertIn("已审核", dashboard)
+            self.assertIn("已通过", dashboard)
 
     def test_import_page_renders_fetch_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

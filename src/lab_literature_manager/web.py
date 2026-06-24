@@ -9,6 +9,7 @@ import html
 import json
 import secrets
 import threading
+from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from http import cookies
@@ -18,7 +19,20 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .data_fetcher import fetch_article_metadata
-from .models import ArticleMetadata, Member, OutputType, PatentMetadata, Permission, Project, ResearchOutput, ReviewStatus, Role
+from .models import (
+    ArticleMetadata,
+    Member,
+    OutputType,
+    PatentMetadata,
+    Permission,
+    Project,
+    ResearchOutput,
+    ReviewStatus,
+    Role,
+    output_type_label,
+    review_status_label,
+    role_label,
+)
 from .permissions import can_perform
 from .repository import ResearchRepository
 
@@ -28,6 +42,29 @@ SESSION_TTL_HOURS = 8
 PASSWORD_ITERATIONS = 180_000
 ACCOUNT_STATUS_ACTIVE = "active"
 ACCOUNT_STATUS_PENDING = "pending"
+DEFAULT_WORKSPACE_NAME = "科研成果管理系统"
+WORKSPACE_SETTINGS_FILE = "workspace_settings.json"
+
+
+@dataclass(frozen=True)
+class WorkspaceSettings:
+    workspace_name: str = DEFAULT_WORKSPACE_NAME
+    workspace_subtitle: str = "成果管理与审核工作台"
+
+    def to_dict(self) -> Dict[str, str]:
+        return {
+            "workspace_name": self.workspace_name,
+            "workspace_subtitle": self.workspace_subtitle,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, object]) -> "WorkspaceSettings":
+        workspace_name = str(data.get("workspace_name", DEFAULT_WORKSPACE_NAME)).strip()
+        workspace_subtitle = str(data.get("workspace_subtitle", "成果管理与审核工作台")).strip()
+        return cls(
+            workspace_name=workspace_name or DEFAULT_WORKSPACE_NAME,
+            workspace_subtitle=workspace_subtitle or "成果管理与审核工作台",
+        )
 
 
 @dataclass(frozen=True)
@@ -261,6 +298,25 @@ class WebApplication:
         self.repository = ResearchRepository(data_dir)
         self.auth_store = LocalAuthStore(auth_path)
         self.sessions = SessionStore()
+        self.settings_path = Path(data_dir) / WORKSPACE_SETTINGS_FILE
+
+    def load_settings(self) -> WorkspaceSettings:
+        if not self.settings_path.exists():
+            return WorkspaceSettings()
+        try:
+            payload = json.loads(self.settings_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Workspace settings file is not valid JSON: {self.settings_path}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"Workspace settings file must contain a JSON object: {self.settings_path}")
+        return WorkspaceSettings.from_dict(payload)
+
+    def save_settings(self, settings: WorkspaceSettings) -> None:
+        self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+        self.settings_path.write_text(
+            json.dumps(settings.to_dict(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     def get_current_user(self, handler: BaseHTTPRequestHandler) -> Optional[WebUser]:
         token = self._get_cookie(handler, SESSION_COOKIE_NAME)
@@ -287,7 +343,8 @@ class WebApplication:
         notice: str = "",
         public_page: bool = False,
     ) -> str:
-        nav = self._render_nav(active_section=active_section, current_user=current_user)
+        settings = self.load_settings()
+        nav = self._render_nav(active_section=active_section, current_user=current_user, settings=settings)
         notice_html = f'<div class="notice">{html.escape(notice)}</div>' if notice else ""
         if public_page:
             page_body = f"{notice_html}{body}"
@@ -832,19 +889,25 @@ class WebApplication:
 </body>
 </html>"""
 
-    def _render_nav(self, *, active_section: str, current_user: Optional[WebUser]) -> str:
+    def _render_nav(
+        self,
+        *,
+        active_section: str,
+        current_user: Optional[WebUser],
+        settings: WorkspaceSettings,
+    ) -> str:
         if current_user is None:
             if self.auth_store.has_users():
                 return ""
             return ""
         links = [
             ("dashboard", "/", "仪表盘"),
-            ("members", "/members", "成员管理"),
-            ("projects", "/projects", "项目管理"),
             ("outputs", "/outputs", "成果管理"),
             ("logout", "/logout", "退出登录"),
         ]
         if current_user.role in {Role.ADMIN, Role.PI}:
+            links.insert(1, ("members", "/members", "成员管理"))
+            links.insert(2, ("projects", "/projects", "项目管理"))
             links.insert(2, ("accounts", "/accounts/pending", "账号审核"))
         items = []
         for section, href, label in links:
@@ -856,15 +919,15 @@ class WebApplication:
           <div class="brand">
             <div class="brand-mark"></div>
             <div>
-              <h1>课题组科研成果管理系统</h1>
-              <p>成果管理与审核工作台</p>
+              <h1>{html.escape(settings.workspace_name)}</h1>
+              <p>{html.escape(settings.workspace_subtitle)}</p>
             </div>
           </div>
           <div class="user-pill">
             <div class="avatar">{html.escape(avatar)}</div>
             <div>
               <strong>{html.escape(current_user.display_name)}</strong><br />
-              <span class="muted">{html.escape(current_user.role.value)}</span>
+              <span class="muted">{html.escape(role_label(current_user.role))}</span>
             </div>
           </div>
           <nav class="nav-section">{''.join(items)}</nav>
@@ -899,6 +962,7 @@ class WebApplication:
 
     def render_login_page(self, error: str = "") -> str:
         error_html = f'<div class="notice">{html.escape(error)}</div>' if error else ""
+        settings = self.load_settings()
         body = f"""
         <div class="login-shell">
           <section class="login-card compact">
@@ -906,8 +970,8 @@ class WebApplication:
               <div class="brand" style="margin-bottom: 24px;">
                 <div class="brand-mark"></div>
                 <div>
-                  <h1>课题组科研成果管理系统</h1>
-                  <p>成果管理与审核工作台</p>
+                  <h1>{html.escape(settings.workspace_name)}</h1>
+                  <p>{html.escape(settings.workspace_subtitle)}</p>
                 </div>
               </div>
               <h2 style="margin:0 0 10px;">登录</h2>
@@ -935,6 +999,7 @@ class WebApplication:
     def render_register_page(self, error: str = "", notice: str = "") -> str:
         error_html = f'<div class="notice">{html.escape(error)}</div>' if error else ""
         notice_html = f'<div class="notice">{html.escape(notice)}</div>' if notice else ""
+        settings = self.load_settings()
         body = f"""
         <div class="login-shell">
           <section class="login-card compact">
@@ -942,7 +1007,7 @@ class WebApplication:
               <div class="brand" style="margin-bottom: 24px;">
                 <div class="brand-mark"></div>
                 <div>
-                  <h1>课题组科研成果管理系统</h1>
+                  <h1>{html.escape(settings.workspace_name)}</h1>
                   <p>新账号需要管理员审核</p>
                 </div>
               </div>
@@ -978,13 +1043,13 @@ class WebApplication:
               <div class="brand" style="margin-bottom: 30px;">
                 <div class="brand-mark"></div>
                 <div>
-                  <h1>课题组科研成果管理系统</h1>
+                  <h1>{html.escape(DEFAULT_WORKSPACE_NAME)}</h1>
                   <p>成果管理与审核工作台</p>
                 </div>
               </div>
               <div class="login-badge">Workspace Setup</div>
-              <h1>创建实验室工作区的第一位管理员。</h1>
-              <p>首次进入时先创建一个管理员账号，之后 PI、管理员和普通成员就可以按权限进入各自的工作区。</p>
+              <h1>创建工作区和第一位管理员。</h1>
+              <p>首次进入时设置工作区名称并创建管理员账号，之后管理员和普通成员就可以按权限进入各自的工作区。</p>
               <div class="login-hero-panel">
                 <h3>建议</h3>
                 <p>管理员账号只用于工作区初始化，不建议与个人成员账号混用。</p>
@@ -994,6 +1059,10 @@ class WebApplication:
               <h2 style="margin:0 0 10px;">工作区设置</h2>
               {error_html}
               <form method="post" action="/setup">
+                <div class="field">
+                  <label for="workspace_name">工作区名称</label>
+                  <input id="workspace_name" name="workspace_name" value="{html.escape(DEFAULT_WORKSPACE_NAME)}" placeholder="例如：马老师课题组、科研成果管理系统" required />
+                </div>
                 <div class="field">
                   <label for="username">管理员用户名</label>
                   <input id="username" name="username" autocomplete="username" required />
@@ -1017,14 +1086,13 @@ class WebApplication:
         return self.render_layout("工作区设置", body, public_page=True)
 
     def render_dashboard(self, current_user: WebUser) -> str:
-        summary = self.repository.build_summary()
-        outputs = self.repository.list_outputs()
+        outputs = self.repository.list_outputs_for_actor(current_user.role, current_user.member_id)
         members = self.repository.list_members()
         projects = self.repository.list_projects()
         recent_outputs = outputs[:5]
-        type_counts = summary["by_type"]
-        status_counts = summary["by_review_status"]
-        year_counts = summary["by_year"]
+        type_counts = self._count_labels((output_type_label(output.output_type) for output in outputs))
+        status_counts = self._count_labels((review_status_label(output.review_status) for output in outputs))
+        year_counts = self._count_labels((str(output.year) for output in outputs if output.year is not None))
         body = f"""
         <section class="stack">
           <div class="topbar">
@@ -1034,14 +1102,14 @@ class WebApplication:
             </div>
             <div class="button-row">
               <a class="button secondary" href="/outputs">查看成果</a>
-              <a class="button secondary" href="/export/excel">导出Excel</a>
+              {self._export_button(current_user)}
             </div>
           </div>
           <div class="grid cards">
-            {self._metric_card("总成果数", str(summary["total_outputs"]), "所有成果记录")}
+            {self._metric_card("总成果数", str(len(outputs)), "当前账号可见成果")}
             {self._metric_card("成员数", str(len(members)), "本地成员档案")}
             {self._metric_card("项目数", str(len(projects)), "关联项目与课题")}
-            {self._metric_card("已审核", str(status_counts.get(ReviewStatus.APPROVED.value, 0)), "已通过审核")}
+            {self._metric_card("已审核", str(status_counts.get(review_status_label(ReviewStatus.APPROVED), 0)), "已通过审核")}
           </div>
           <div class="grid panels">
             <article class="card">
@@ -1082,7 +1150,7 @@ class WebApplication:
             f"<tr>"
             f"<td><a href=\"/members/{html.escape(member.member_id)}\">{html.escape(member.member_id)}</a></td>"
             f"<td>{html.escape(member.name)}</td>"
-            f"<td>{html.escape(member.role.value)}</td>"
+            f"<td>{html.escape(role_label(member.role))}</td>"
             f"<td>{html.escape(member.email or '-')}</td>"
             f"</tr>"
             for member in members
@@ -1185,12 +1253,12 @@ class WebApplication:
         return self.render_layout("项目管理", body, active_section="projects", current_user=current_user)
 
     def render_outputs_page(self, current_user: WebUser) -> str:
-        outputs = self.repository.list_outputs()
+        outputs = self.repository.list_outputs_for_actor(current_user.role, current_user.member_id)
         rows = "".join(
             f"<tr>"
             f"<td><a href=\"/outputs/{html.escape(output.output_id)}\">{html.escape(output.output_id)}</a></td>"
             f"<td>{html.escape(output.title)}</td>"
-            f"<td>{html.escape(output.output_type.value)}</td>"
+            f"<td>{html.escape(output_type_label(output.output_type))}</td>"
             f"<td>{self._status_badge(output.review_status)}</td>"
             f"<td>{html.escape(str(output.year) if output.year is not None else '-')}</td>"
             f"</tr>"
@@ -1219,6 +1287,11 @@ class WebApplication:
 
     def render_import_page(self, current_user: WebUser, error: str = "") -> str:
         error_html = f'<div class="notice">{html.escape(error)}</div>' if error else ""
+        members = self.repository.list_members()
+        owner_options = "".join(
+            f'<label style="display:flex;gap:8px;padding:8px;"><input type="checkbox" name="owner_member_ids" value="{html.escape(m.member_id)}"{" checked" if m.member_id == current_user.member_id else ""} /><span>{html.escape(m.name)} ({html.escape(m.member_id)})</span></label>'
+            for m in members
+        )
         body = f"""
         <section class="stack">
           <div class="section-banner">
@@ -1255,9 +1328,12 @@ class WebApplication:
                   <label for="output_id">成果编号</label>
                   <input id="output_id" name="output_id" placeholder="不填则自动生成" />
                 </div>
-                <div class="field">
-                  <label for="owner_member_id">负责人编号</label>
-                  <input id="owner_member_id" name="owner_member_id" value="{html.escape(current_user.member_id)}" required />
+                <div class="field span-2">
+                  <label>负责人</label>
+                  <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
+                    {owner_options if owner_options else '<p class="muted">暂无成员。</p>'}
+                  </div>
+                  <input id="owner_member_ids_manual" name="owner_member_ids_manual" placeholder="手动输入负责人，多个用逗号、分号或换行分隔" style="margin-top:10px;" />
                 </div>
               </div>
               <div class="button-row">
@@ -1285,7 +1361,7 @@ class WebApplication:
           <div class="topbar">
             <div>
               <h2>{html.escape(output.title)}</h2>
-              <div class="subtle">{html.escape(output.output_id)} · {html.escape(output.output_type.value)}</div>
+              <div class="subtle">{html.escape(output.output_id)} · {html.escape(output_type_label(output.output_type))}</div>
             </div>
             <div class="button-row">{''.join(actions)}</div>
           </div>
@@ -1296,7 +1372,7 @@ class WebApplication:
                 <span>{self._status_badge(output.review_status)}</span>
               </div>
               <div class="kv">
-                <div><span>状态</span><span>{html.escape(output.review_status.value)}</span></div>
+                <div><span>状态</span><span>{html.escape(review_status_label(output.review_status))}</span></div>
                 <div><span>年份</span><span>{html.escape(str(output.year) if output.year is not None else '-')}</span></div>
                 <div><span>负责人</span><span>{html.escape(', '.join(output.owner_member_ids))}</span></div>
                 <div><span>参与人</span><span>{html.escape(', '.join(output.participant_member_ids) or '-')}</span></div>
@@ -1335,16 +1411,67 @@ class WebApplication:
             return "login", self.render_login_page()
         return "setup", self.render_setup_page()
 
-    def _normalise_output_id(self, value: str, source_type: str) -> str:
+    def _normalise_output_id(self, value: str, source_type: str, *, year: Optional[int] = None) -> str:
         trimmed = value.strip()
         if trimmed:
             return trimmed
-        prefix = {"doi": "doi", "pmid": "pmid", "patent": "patent"}.get(source_type, "output")
-        return f"{prefix}-{secrets.token_hex(4)}"
+        output_type = OutputType.PATENT if source_type == "patent" else OutputType.ARTICLE
+        return self.repository.generate_output_id(output_type, year=year)
 
-    def _build_output_from_fetch(self, fields: Dict[str, str], current_user: WebUser) -> ResearchOutput:
+    def _merge_people_fields(
+        self,
+        fields_multi: Dict[str, List[str]],
+        checkbox_name: str,
+        manual_name: str,
+    ) -> List[str]:
+        values = [v.strip() for v in fields_multi.get(checkbox_name, []) if v.strip()]
+        raw_manual = fields_multi.get(manual_name, [""])[0]
+        for separator in (";", "；", "，", "\n", "\r"):
+            raw_manual = raw_manual.replace(separator, ",")
+        values.extend(item.strip() for item in raw_manual.split(",") if item.strip())
+        merged: List[str] = []
+        seen = set()
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            merged.append(value)
+        return merged
+
+    def _resolve_owner_ids_from_fields(
+        self,
+        fields: Dict[str, str],
+        current_user: WebUser,
+        fields_multi: Optional[Dict[str, List[str]]] = None,
+    ) -> List[str]:
+        owner_ids: List[str]
+        if fields_multi is None:
+            owner_ids = []
+        else:
+            owner_ids = self._merge_people_fields(fields_multi, "owner_member_ids", "owner_member_ids_manual")
+        legacy_owner = fields.get("owner_member_id", "").strip()
+        if legacy_owner:
+            owner_ids.append(legacy_owner)
+        if not owner_ids:
+            owner_ids.append(current_user.member_id)
+        merged: List[str] = []
+        seen = set()
+        for owner_id in owner_ids:
+            if owner_id in seen:
+                continue
+            seen.add(owner_id)
+            merged.append(owner_id)
+        return merged
+
+    def _build_output_from_fetch(
+        self,
+        fields: Dict[str, str],
+        current_user: WebUser,
+        fields_multi: Optional[Dict[str, List[str]]] = None,
+    ) -> ResearchOutput:
         source_type = fields.get("source_type", "").strip()
         query = fields.get("query", "").strip()
+        owner_ids = self._resolve_owner_ids_from_fields(fields, current_user, fields_multi)
         if source_type == "doi":
             article_data = fetch_article_metadata(doi=query)
             if article_data is None:
@@ -1358,10 +1485,10 @@ class WebApplication:
                 first_authors=article_data.authors[:3],
             )
             return ResearchOutput(
-                output_id=self._normalise_output_id(fields.get("output_id", ""), source_type),
+                output_id=self._normalise_output_id(fields.get("output_id", ""), source_type, year=article_data.year),
                 title=fields.get("title", "").strip() or article_data.title or query,
                 output_type=OutputType.ARTICLE,
-                owner_member_ids=[fields.get("owner_member_id", "").strip() or current_user.member_id],
+                owner_member_ids=owner_ids,
                 year=article_data.year,
                 summary=article_data.abstract or "",
                 article=article,
@@ -1379,10 +1506,10 @@ class WebApplication:
                 first_authors=article_data.authors[:3],
             )
             return ResearchOutput(
-                output_id=self._normalise_output_id(fields.get("output_id", ""), source_type),
+                output_id=self._normalise_output_id(fields.get("output_id", ""), source_type, year=article_data.year),
                 title=fields.get("title", "").strip() or article_data.title or query,
                 output_type=OutputType.ARTICLE,
-                owner_member_ids=[fields.get("owner_member_id", "").strip() or current_user.member_id],
+                owner_member_ids=owner_ids,
                 year=article_data.year,
                 summary=article_data.abstract or "",
                 article=article,
@@ -1409,7 +1536,7 @@ class WebApplication:
                 output_id=self._normalise_output_id(fields.get("output_id", ""), source_type),
                 title=fields.get("title", "").strip() or patent.title or query,
                 output_type=OutputType.PATENT,
-                owner_member_ids=[fields.get("owner_member_id", "").strip() or current_user.member_id],
+                owner_member_ids=owner_ids,
                 summary=patent.abstract,
                 patent=patent,
             )
@@ -1433,6 +1560,14 @@ class WebApplication:
         </article>
         """
 
+    def _export_button(self, current_user: WebUser) -> str:
+        if not can_perform(current_user.role, Permission.EXPORT, actor_member_id=current_user.member_id):
+            return ""
+        return '<a class="button secondary" href="/export/excel">导出Excel</a>'
+
+    def _count_labels(self, labels: Iterable[str]) -> Dict[str, int]:
+        return dict(sorted(Counter(labels).items()))
+
     def _bar_chart(self, counts: Dict[str, int], *, accent_class: str) -> str:
         if not counts:
             return '<div class="muted">暂无数据。</div>'
@@ -1450,7 +1585,7 @@ class WebApplication:
 
     def _output_table(self, outputs: List[ResearchOutput]) -> str:
         rows = "".join(
-            f"<tr><td><a href=\"/outputs/{html.escape(output.output_id)}\">{html.escape(output.output_id)}</a></td><td>{html.escape(output.title)}</td><td>{html.escape(output.output_type.value)}</td><td>{self._status_badge(output.review_status)}</td></tr>"
+            f"<tr><td><a href=\"/outputs/{html.escape(output.output_id)}\">{html.escape(output.output_id)}</a></td><td>{html.escape(output.title)}</td><td>{html.escape(output_type_label(output.output_type))}</td><td>{self._status_badge(output.review_status)}</td></tr>"
             for output in outputs
         ) or '<tr><td colspan="4" class="muted">暂无成果数据。</td></tr>'
         return f"""
@@ -1461,7 +1596,7 @@ class WebApplication:
         """
 
     def _status_badge(self, status: ReviewStatus) -> str:
-        return f'<span class="badge status-{html.escape(status.value)}">{html.escape(status.value.title())}</span>'
+        return f'<span class="badge status-{html.escape(status.value)}">{html.escape(review_status_label(status))}</span>'
 
     def _detail_metadata(self, output: ResearchOutput) -> str:
         chunks = [
@@ -1504,7 +1639,7 @@ class WebApplication:
         )
         error_html = f'<div class="notice">{html.escape(error)}</div>' if error else ""
         role_options = "".join(
-            f'<option value="{role.value}"{" selected" if member and member.role == role else ""}>{html.escape(role.value)}</option>'
+            f'<option value="{role.value}"{" selected" if member and member.role == role else ""}>{html.escape(role_label(role))}</option>'
             for role in Role
         )
         body = f"""
@@ -1554,7 +1689,7 @@ class WebApplication:
           <div class="topbar">
             <div>
               <h2>{html.escape(member.name)}</h2>
-              <div class="subtle">{html.escape(member.member_id)} · {html.escape(member.role.value)}</div>
+              <div class="subtle">{html.escape(member.member_id)} · {html.escape(role_label(member.role))}</div>
             </div>
             <div class="button-row">
               <a class="button primary" href="/members/{html.escape(member.member_id)}/edit">编辑</a>
@@ -1567,7 +1702,7 @@ class WebApplication:
             <div class="kv">
               <div><span>成员编号</span><span>{html.escape(member.member_id)}</span></div>
               <div><span>姓名</span><span>{html.escape(member.name)}</span></div>
-              <div><span>角色</span><span>{html.escape(member.role.value)}</span></div>
+              <div><span>角色</span><span>{html.escape(role_label(member.role))}</span></div>
               <div><span>邮箱</span><span>{html.escape(member.email or '-')}</span></div>
               <div><span>备注</span><span>{html.escape(member.notes or '-')}</span></div>
             </div>
@@ -1621,6 +1756,8 @@ class WebApplication:
                 <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
                   {member_checkboxes if member_checkboxes else '<p class="muted">暂无成员，请先添加成员。</p>'}
                 </div>
+                <div class="inline-help">可勾选成员，也可在下方手动输入未建档负责人。</div>
+                <input id="owner_member_ids_manual" name="owner_member_ids_manual" placeholder="手动输入负责人，多个用逗号、分号或换行分隔" style="margin-top:10px;" />
               </div>
               <div class="field">
                 <label for="funding_source">资助来源</label>
@@ -1683,11 +1820,11 @@ class WebApplication:
         output_id_field = (
             f'<input id="output_id" name="output_id" value="{html.escape(output.output_id)}" readonly />'
             if is_edit
-            else '<input id="output_id" name="output_id" required />'
+            else '<input id="output_id" name="output_id" placeholder="留空自动按类别生成，如 LW-2026-001" />'
         )
         error_html = f'<div class="notice">{html.escape(error)}</div>' if error else ""
         output_type_options = "".join(
-            f'<option value="{ot.value}"{" selected" if output and output.output_type == ot else ""}>{html.escape(ot.value)}</option>'
+            f'<option value="{ot.value}"{" selected" if output and output.output_type == ot else ""}>{html.escape(output_type_label(ot))}</option>'
             for ot in OutputType
         )
         members = self.repository.list_members()
@@ -1724,8 +1861,9 @@ class WebApplication:
             <form method="post" action="{action}" class="stack">
               <div class="form-grid">
                 <div class="field">
-                  <label for="output_id">成果编号 *</label>
+                  <label for="output_id">成果编号</label>
                   {output_id_field}
+                  <div class="inline-help">留空时按成果类别和年份自动生成编号，例如论文 LW-2026-001、专利 ZL-2026-001。</div>
                 </div>
                 <div class="field">
                   <label for="title">成果标题 *</label>
@@ -1744,12 +1882,15 @@ class WebApplication:
                   <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
                     {owner_checkboxes if owner_checkboxes else '<p class="muted">暂无成员。</p>'}
                   </div>
+                  <div class="inline-help">可勾选成员，也可在下方手动输入未建档成员或外部合作者。</div>
+                  <input id="owner_member_ids_manual" name="owner_member_ids_manual" placeholder="手动输入负责人，多个用逗号、分号或换行分隔" style="margin-top:10px;" />
                 </div>
                 <div class="field span-2">
                   <label>参与人</label>
                   <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
                     {participant_checkboxes if participant_checkboxes else '<p class="muted">暂无成员。</p>'}
                   </div>
+                  <input id="participant_member_ids_manual" name="participant_member_ids_manual" placeholder="手动输入参与人，多个用逗号、分号或换行分隔" style="margin-top:10px;" />
                 </div>
                 <div class="field span-2">
                   <label>关联项目</label>
@@ -1916,6 +2057,16 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
         if path == "/export/excel":
             self._handle_excel_export(user)
             return
+        is_admin_area = (
+            path == "/members"
+            or path.startswith("/members/")
+            or path == "/projects"
+            or path.startswith("/projects/")
+            or path == "/accounts/pending"
+        )
+        if is_admin_area and user.role not in {Role.ADMIN, Role.PI}:
+            self.send_error(403, "Forbidden")
+            return
         if path == "/members":
             self._send_html("Members", self.app.render_members_page(user))
             return
@@ -1998,6 +2149,9 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             except KeyError:
                 self.send_error(404, "Not Found")
                 return
+            if not can_perform(user.role, Permission.VIEW, output=output, actor_member_id=user.member_id):
+                self.send_error(403, "Forbidden")
+                return
             self._send_html("Edit Output", self.app.render_output_form(user, output))
             return
         if path.startswith("/outputs/"):
@@ -2009,6 +2163,9 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 output = self.app.repository.get_output(output_id)
             except KeyError:
                 self.send_error(404, "Not Found")
+                return
+            if not can_perform(user.role, Permission.VIEW, output=output, actor_member_id=user.member_id):
+                self.send_error(403, "Forbidden")
                 return
             self._send_html(output.title, self.app.render_output_detail(user, output))
             return
@@ -2049,6 +2206,8 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 self.app.redirect(self, "/login")
                 return
             try:
+                workspace_name = fields.get("workspace_name", "").strip() or DEFAULT_WORKSPACE_NAME
+                self.app.save_settings(WorkspaceSettings(workspace_name=workspace_name))
                 self.app.auth_store.create_user(
                     fields.get("username", ""),
                     fields.get("password", ""),
@@ -2086,6 +2245,16 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
         user = self.app.get_current_user(self)
         if user is None:
             self.app.redirect(self, "/login")
+            return
+
+        is_admin_mutation = (
+            path.startswith("/members/")
+            or path in {"/members/add", "/projects/add"}
+            or path.startswith("/projects/")
+            or (path.startswith("/accounts/") and path.endswith("/approve"))
+        )
+        if is_admin_mutation and user.role not in {Role.ADMIN, Role.PI}:
+            self.send_error(403, "Forbidden")
             return
 
         if path.startswith("/accounts/") and path.endswith("/approve"):
@@ -2225,7 +2394,7 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_project_add(self, user: WebUser, fields: Dict[str, str], fields_multi: Dict[str, List[str]]) -> None:
         try:
-            owner_ids = [v.strip() for v in fields_multi.get("owner_member_ids", []) if v.strip()]
+            owner_ids = self.app._merge_people_fields(fields_multi, "owner_member_ids", "owner_member_ids_manual")
             start_year = fields.get("start_year", "").strip()
             end_year = fields.get("end_year", "").strip()
             project = Project(
@@ -2245,7 +2414,7 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_project_edit(self, user: WebUser, project_id: str, fields: Dict[str, str], fields_multi: Dict[str, List[str]]) -> None:
         try:
-            owner_ids = [v.strip() for v in fields_multi.get("owner_member_ids", []) if v.strip()]
+            owner_ids = self.app._merge_people_fields(fields_multi, "owner_member_ids", "owner_member_ids_manual")
             start_year = fields.get("start_year", "").strip()
             end_year = fields.get("end_year", "").strip()
             project = Project(
@@ -2283,19 +2452,29 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_output_add(self, user: WebUser, fields: Dict[str, str], fields_multi: Dict[str, List[str]]) -> None:
         try:
-            owner_ids = [v.strip() for v in fields_multi.get("owner_member_ids", []) if v.strip()]
-            participant_ids = [v.strip() for v in fields_multi.get("participant_member_ids", []) if v.strip()]
+            owner_ids = self.app._merge_people_fields(fields_multi, "owner_member_ids", "owner_member_ids_manual")
+            participant_ids = self.app._merge_people_fields(
+                fields_multi,
+                "participant_member_ids",
+                "participant_member_ids_manual",
+            )
             project_ids = [v.strip() for v in fields_multi.get("project_ids", []) if v.strip()]
             keywords_raw = fields.get("keywords", "").strip()
             keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()]
             year = fields.get("year", "").strip()
             output_type = OutputType(fields.get("output_type", OutputType.ARTICLE.value))
+            output_year = int(year) if year else None
+            output_id = fields.get("output_id", "").strip() or self.app.repository.generate_output_id(
+                output_type,
+                year=output_year,
+            )
 
             article = None
+            patent = None
             if output_type == OutputType.ARTICLE:
                 article_type = fields.get("article_type", "").strip()
                 if not article_type:
-                    raise ValueError("Article type is required for article outputs.")
+                    raise ValueError("论文成果必须填写文章类型。")
                 article = ArticleMetadata(
                     article_type=article_type,
                     journal=fields.get("journal", "").strip(),
@@ -2304,19 +2483,29 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                     issn=fields.get("issn", "").strip(),
                     submission_status=fields.get("submission_status", "").strip(),
                 )
+            if output_type == OutputType.PATENT:
+                patent = PatentMetadata(
+                    patent_number=fields.get("patent_number", "").strip(),
+                    application_number=fields.get("application_number", "").strip(),
+                    title=fields.get("patent_title", "").strip(),
+                    country_code=fields.get("patent_country", "").strip(),
+                    kind_code=fields.get("patent_kind", "").strip(),
+                    status=fields.get("patent_status", "").strip(),
+                )
 
             output = ResearchOutput(
-                output_id=fields.get("output_id", "").strip(),
+                output_id=output_id,
                 title=fields.get("title", "").strip(),
                 output_type=output_type,
                 owner_member_ids=owner_ids,
                 participant_member_ids=participant_ids,
                 project_ids=project_ids,
-                year=int(year) if year else None,
+                year=output_year,
                 keywords=keywords,
                 summary=fields.get("summary", "").strip(),
                 notes=fields.get("notes", "").strip(),
                 article=article,
+                patent=patent,
             )
             self.app.repository.add_output(output, actor_role=user.role, actor_member_id=user.member_id)
         except (ValueError, KeyError, PermissionError) as exc:
@@ -2326,7 +2515,7 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_import_fetch(self, user: WebUser, fields: Dict[str, str], fields_multi: Dict[str, List[str]]) -> None:
         try:
-            output = self.app._build_output_from_fetch(fields, user)
+            output = self.app._build_output_from_fetch(fields, user, fields_multi)
             try:
                 self.app.repository.add_output(output, actor_role=user.role, actor_member_id=user.member_id)
             except ValueError:
@@ -2339,8 +2528,12 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
     def _handle_output_edit(self, user: WebUser, output_id: str, fields: Dict[str, str], fields_multi: Dict[str, List[str]]) -> None:
         try:
             existing = self.app.repository.get_output(output_id)
-            owner_ids = [v.strip() for v in fields_multi.get("owner_member_ids", []) if v.strip()]
-            participant_ids = [v.strip() for v in fields_multi.get("participant_member_ids", []) if v.strip()]
+            owner_ids = self.app._merge_people_fields(fields_multi, "owner_member_ids", "owner_member_ids_manual")
+            participant_ids = self.app._merge_people_fields(
+                fields_multi,
+                "participant_member_ids",
+                "participant_member_ids_manual",
+            )
             project_ids = [v.strip() for v in fields_multi.get("project_ids", []) if v.strip()]
             keywords_raw = fields.get("keywords", "").strip()
             keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()]
@@ -2348,10 +2541,11 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             output_type = OutputType(fields.get("output_type", OutputType.ARTICLE.value))
 
             article = None
+            patent = None
             if output_type == OutputType.ARTICLE:
                 article_type = fields.get("article_type", "").strip()
                 if not article_type:
-                    raise ValueError("Article type is required for article outputs.")
+                    raise ValueError("论文成果必须填写文章类型。")
                 article = ArticleMetadata(
                     article_type=article_type,
                     journal=fields.get("journal", "").strip(),
@@ -2359,6 +2553,15 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                     pmid=fields.get("pmid", "").strip(),
                     issn=fields.get("issn", "").strip(),
                     submission_status=fields.get("submission_status", "").strip(),
+                )
+            if output_type == OutputType.PATENT:
+                patent = PatentMetadata(
+                    patent_number=fields.get("patent_number", "").strip(),
+                    application_number=fields.get("application_number", "").strip(),
+                    title=fields.get("patent_title", "").strip(),
+                    country_code=fields.get("patent_country", "").strip(),
+                    kind_code=fields.get("patent_kind", "").strip(),
+                    status=fields.get("patent_status", "").strip(),
                 )
 
             output = ResearchOutput(
@@ -2374,6 +2577,7 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 notes=fields.get("notes", "").strip(),
                 review_status=existing.review_status,
                 article=article,
+                patent=patent,
                 created_at=existing.created_at,
             )
             self.app.repository.update_output(output, actor_role=user.role, actor_member_id=user.member_id)
@@ -2449,6 +2653,9 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_excel_export(self, user: WebUser) -> None:
         """处理Excel导出请求。"""
+        if not can_perform(user.role, Permission.EXPORT, actor_member_id=user.member_id):
+            self.send_error(403, "Forbidden")
+            return
         try:
             from .excel_export import export_to_excel
             import tempfile

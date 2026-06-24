@@ -45,6 +45,25 @@ class OutputType(str, Enum):
     DATASET_CODE = "dataset_code"
 
 
+OUTPUT_TYPE_LABELS = {
+    OutputType.ARTICLE: "论文",
+    OutputType.PATENT: "专利",
+    OutputType.SOFTWARE_COPYRIGHT: "软件著作权",
+    OutputType.CONFERENCE: "会议成果",
+    OutputType.PROJECT_MATERIAL: "项目/基金材料",
+    OutputType.DATASET_CODE: "数据与代码",
+}
+
+OUTPUT_TYPE_ID_PREFIXES = {
+    OutputType.ARTICLE: "LW",
+    OutputType.PATENT: "ZL",
+    OutputType.SOFTWARE_COPYRIGHT: "RZ",
+    OutputType.CONFERENCE: "HY",
+    OutputType.PROJECT_MATERIAL: "XM",
+    OutputType.DATASET_CODE: "SJ",
+}
+
+
 class ReviewStatus(str, Enum):
     DRAFT = "draft"
     SUBMITTED = "submitted"
@@ -53,11 +72,48 @@ class ReviewStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+REVIEW_STATUS_LABELS = {
+    ReviewStatus.DRAFT: "草稿",
+    ReviewStatus.SUBMITTED: "待审核",
+    ReviewStatus.RETURNED: "已退回",
+    ReviewStatus.APPROVED: "已通过",
+    ReviewStatus.ARCHIVED: "已归档",
+}
+
+
 class Role(str, Enum):
     PI = "pi"
     ADMIN = "admin"
     MEMBER = "member"
     READONLY = "readonly"
+
+
+ROLE_LABELS = {
+    Role.PI: "PI",
+    Role.ADMIN: "管理员",
+    Role.MEMBER: "成员",
+    Role.READONLY: "只读",
+}
+
+
+def output_type_label(output_type: OutputType | str) -> str:
+    normalized = output_type if isinstance(output_type, OutputType) else OutputType(str(output_type))
+    return OUTPUT_TYPE_LABELS[normalized]
+
+
+def output_type_id_prefix(output_type: OutputType | str) -> str:
+    normalized = output_type if isinstance(output_type, OutputType) else OutputType(str(output_type))
+    return OUTPUT_TYPE_ID_PREFIXES[normalized]
+
+
+def review_status_label(status: ReviewStatus | str) -> str:
+    normalized = status if isinstance(status, ReviewStatus) else ReviewStatus(str(status))
+    return REVIEW_STATUS_LABELS[normalized]
+
+
+def role_label(role: Role | str) -> str:
+    normalized = role if isinstance(role, Role) else Role(str(role))
+    return ROLE_LABELS[normalized]
 
 
 class Permission(str, Enum):
