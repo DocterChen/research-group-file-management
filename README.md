@@ -124,8 +124,7 @@ PYTHONPATH=src python3 -m lab_literature_manager.cli \
 启动本地浏览器界面：
 
 ```bash
-PYTHONPATH=src python3 -m lab_literature_manager.cli web serve
-```
+PYTHONPATH=src python3 -m lab_literature_manager.cli web serve ```
 
 默认会在 `http://127.0.0.1:8080` 提供登录页，首次启动时会自动创建一个本地管理员账号：
 

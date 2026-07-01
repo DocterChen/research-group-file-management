@@ -318,6 +318,31 @@ class ResearchRepository:
         )
         return updated
 
+    def archive_output(
+        self,
+        output_id: str,
+        *,
+        actor_role: Role,
+        actor_member_id: str,
+        comment: str = "",
+    ) -> ResearchOutput:
+        output = self.get_output(output_id)
+        ensure_permission(
+            actor_role,
+            Permission.REVIEW,
+            output=output,
+            actor_member_id=actor_member_id,
+            action_label="archive output",
+        )
+        updated = self._transition_output(
+            output,
+            ReviewStatus.ARCHIVED,
+            actor_member_id=actor_member_id,
+            actor_role=actor_role,
+            comment=comment or "Archived.",
+        )
+        return updated
+
     def list_review_records(self, output_id: Optional[str] = None) -> List[ReviewRecord]:
         records = self._load_entities("reviews", ReviewRecord.from_dict, sort_key=lambda item: item.created_at)
         if output_id:
@@ -507,6 +532,22 @@ class ResearchRepository:
             "schema_version": SCHEMA_VERSION,
             "items": [item.to_dict() for item in materialized],
         }
-        with path.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
+        # 使用临时文件+原子替换，避免写坏数据
+        import tempfile
+        import os
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp", prefix=".tmp_")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            # 原子替换
+            os.replace(tmp_path, path)
+        except Exception:
+            # 清理临时文件
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise

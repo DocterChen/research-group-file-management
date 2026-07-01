@@ -50,6 +50,10 @@ ACCOUNT_STATUS_ACTIVE = "active"
 ACCOUNT_STATUS_PENDING = "pending"
 DEFAULT_WORKSPACE_NAME = "科研成果管理系统"
 WORKSPACE_SETTINGS_FILE = "workspace_settings.json"
+CSRF_TOKEN_NAME = "csrf_token"
+CSRF_TTL_HOURS = 8
+MAX_FORM_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,8 @@ class WebUser:
     account_status: str = ACCOUNT_STATUS_ACTIVE
     approved_by: str = ""
     approved_at: str = ""
+    deletion_requested_at: str = ""
+    deletion_approved_by: str = ""
 
     def to_dict(self) -> Dict[str, str]:
         return {
@@ -98,6 +104,8 @@ class WebUser:
             "account_status": self.account_status,
             "approved_by": self.approved_by,
             "approved_at": self.approved_at,
+            "deletion_requested_at": self.deletion_requested_at,
+            "deletion_approved_by": self.deletion_approved_by,
         }
 
     @classmethod
@@ -113,6 +121,8 @@ class WebUser:
             account_status=str(data.get("account_status", ACCOUNT_STATUS_ACTIVE)),
             approved_by=str(data.get("approved_by", "")),
             approved_at=str(data.get("approved_at", "")),
+            deletion_requested_at=str(data.get("deletion_requested_at", "")),
+            deletion_approved_by=str(data.get("deletion_approved_by", "")),
         )
 
 
@@ -120,6 +130,7 @@ class WebUser:
 class SessionRecord:
     username: str
     expires_at: datetime
+    csrf_token: str
 
 
 @dataclass
@@ -178,6 +189,10 @@ class LocalAuthStore:
 
     def list_pending_users(self) -> List[WebUser]:
         return [user for user in self.list_users() if user.account_status == ACCOUNT_STATUS_PENDING]
+
+    def list_deletion_requested_users(self) -> List[WebUser]:
+        """获取所有申请注销的用户"""
+        return [user for user in self.list_users() if user.deletion_requested_at and not user.deletion_approved_by]
 
     def get_user(self, username: str) -> Optional[WebUser]:
         normalized = username.strip()
@@ -275,6 +290,76 @@ class LocalAuthStore:
             self._save_users(updated_users)
             return user
 
+    def request_account_deletion(self, username: str) -> WebUser:
+        """用户申请注销账号"""
+        normalized = username.strip()
+        if not normalized:
+            raise ValueError("Username must not be empty.")
+        with self._lock:
+            users = self.list_users()
+            updated_users: List[WebUser] = []
+            requested: Optional[WebUser] = None
+            for user in users:
+                if user.username == normalized:
+                    if user.deletion_requested_at:
+                        raise ValueError("注销申请已存在，请等待管理员审批。")
+                    requested = replace(
+                        user,
+                        deletion_requested_at=self._now_iso(),
+                    )
+                    updated_users.append(requested)
+                else:
+                    updated_users.append(user)
+            if requested is None:
+                raise KeyError(f"User not found: {normalized}")
+            self._save_users(updated_users)
+            return requested
+
+    def approve_account_deletion(self, username: str, *, approved_by: str) -> None:
+        """管理员审批注销申请并删除账号"""
+        normalized = username.strip()
+        if not normalized:
+            raise ValueError("Username must not be empty.")
+        with self._lock:
+            users = self.list_users()
+            user_to_delete = None
+            for user in users:
+                if user.username == normalized:
+                    if not user.deletion_requested_at:
+                        raise ValueError("该用户未申请注销。")
+                    user_to_delete = user
+                    break
+            if user_to_delete is None:
+                raise KeyError(f"User not found: {normalized}")
+            # 删除用户
+            updated_users = [user for user in users if user.username != normalized]
+            self._save_users(updated_users)
+
+    def reject_account_deletion(self, username: str) -> WebUser:
+        """管理员拒绝注销申请"""
+        normalized = username.strip()
+        if not normalized:
+            raise ValueError("Username must not be empty.")
+        with self._lock:
+            users = self.list_users()
+            updated_users: List[WebUser] = []
+            rejected: Optional[WebUser] = None
+            for user in users:
+                if user.username == normalized:
+                    if not user.deletion_requested_at:
+                        raise ValueError("该用户未申请注销。")
+                    rejected = replace(
+                        user,
+                        deletion_requested_at="",
+                    )
+                    updated_users.append(rejected)
+                else:
+                    updated_users.append(user)
+            if rejected is None:
+                raise KeyError(f"User not found: {normalized}")
+            self._save_users(updated_users)
+            return rejected
+
     def _load_payload(self) -> Dict[str, object]:
         if not self.path.exists():
             return {"schema_version": AUTH_SCHEMA_VERSION, "items": []}
@@ -297,7 +382,25 @@ class LocalAuthStore:
             "schema_version": AUTH_SCHEMA_VERSION,
             "items": [user.to_dict() for user in sorted(users, key=lambda item: item.username.lower())],
         }
-        self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        # 使用临时文件+原子替换，避免写坏数据
+        import tempfile
+        import os
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=self.path.parent, suffix=".tmp", prefix=".tmp_auth_")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            # 原子替换
+            os.replace(tmp_path, self.path)
+        except Exception:
+            # 清理临时文件
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     @staticmethod
     def _hash_password(password: str, salt: bytes) -> str:
@@ -323,9 +426,10 @@ class SessionStore:
 
     def create(self, username: str) -> str:
         token = secrets.token_urlsafe(32)
+        csrf_token = secrets.token_urlsafe(32)
         expires_at = datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)
         with self._lock:
-            self._sessions[token] = SessionRecord(username=username, expires_at=expires_at)
+            self._sessions[token] = SessionRecord(username=username, expires_at=expires_at, csrf_token=csrf_token)
         return token
 
     def get(self, token: str) -> Optional[str]:
@@ -341,6 +445,18 @@ class SessionStore:
                 return None
             record.expires_at = datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)
             return record.username
+
+    def get_csrf_token(self, token: str) -> Optional[str]:
+        normalized = token.strip()
+        if not normalized:
+            return None
+        with self._lock:
+            record = self._sessions.get(normalized)
+            if record is None:
+                return None
+            if record.expires_at <= datetime.now(timezone.utc):
+                return None
+            return record.csrf_token
 
     def revoke(self, token: str) -> None:
         with self._lock:
@@ -410,6 +526,23 @@ class WebApplication:
             return None
         return self.auth_store.get_user(username)
 
+    def verify_csrf_token(self, handler: BaseHTTPRequestHandler, form_token: str) -> bool:
+        """验证CSRF令牌"""
+        session_token = self._get_cookie(handler, SESSION_COOKIE_NAME)
+        if not session_token:
+            return False
+        expected_token = self.sessions.get_csrf_token(session_token)
+        if not expected_token:
+            return False
+        return hmac.compare_digest(expected_token, form_token.strip())
+
+    def get_csrf_token(self, handler: BaseHTTPRequestHandler) -> str:
+        """获取当前会话的CSRF令牌"""
+        session_token = self._get_cookie(handler, SESSION_COOKIE_NAME)
+        if not session_token:
+            return ""
+        return self.sessions.get_csrf_token(session_token) or ""
+
     def redirect(self, handler: BaseHTTPRequestHandler, location: str) -> None:
         handler.send_response(303)
         handler.send_header("Location", location)
@@ -425,6 +558,7 @@ class WebApplication:
         current_user: Optional[WebUser] = None,
         notice: str = "",
         public_page: bool = False,
+        handler: Optional[BaseHTTPRequestHandler] = None,
     ) -> str:
         settings = self.load_settings()
         nav = self._render_nav(active_section=active_section, current_user=current_user, settings=settings)
@@ -1088,7 +1222,13 @@ class WebApplication:
     }}
     @media (max-width: 1080px) {{
       .shell {{ grid-template-columns: 1fr; }}
-      .sidebar {{ border-right: none; border-bottom: 1px solid var(--line); }}
+      .sidebar {{
+        position: static;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--line);
+        overflow-y: visible;
+      }}
       .cards, .panels, .detail-grid, .login-card, .workflow-grid, .form-grid {{ grid-template-columns: 1fr; }}
       .bar-row {{ grid-template-columns: 1fr; }}
       .content {{ padding: 18px; }}
@@ -1116,22 +1256,26 @@ class WebApplication:
         # 计算待审核数量和待审批账号数量
         pending_review_count = 0
         pending_account_count = 0
+        deletion_request_count = 0
         if current_user.role in {Role.ADMIN, Role.PI}:
             pending_outputs = self.repository.list_outputs(status=ReviewStatus.SUBMITTED)
             pending_review_count = len(pending_outputs)
             pending_users = self.auth_store.list_pending_users()
             pending_account_count = len(pending_users)
+            deletion_requested_users = self.auth_store.list_deletion_requested_users()
+            deletion_request_count = len(deletion_requested_users)
 
         links = [
             ("dashboard", "/", "仪表盘", 0),
             ("outputs", "/outputs", "成果管理", 0),
+            ("account", "/account/settings", "账号设置", 0),
             ("logout", "/logout", "退出登录", 0),
         ]
         if current_user.role in {Role.ADMIN, Role.PI}:
             links.insert(1, ("members", "/members", "成员管理", 0))
             links.insert(2, ("projects", "/projects", "项目管理", 0))
             links.insert(2, ("reviews", "/reviews", "审核工作台", pending_review_count))
-            links.insert(3, ("accounts", "/accounts/pending", "账号审核", pending_account_count))
+            links.insert(3, ("accounts", "/accounts/pending", "账号审核", pending_account_count + deletion_request_count))
         items = []
         for section, href, label, badge_count in links:
             active = " active" if active_section == section else ""
@@ -1427,14 +1571,17 @@ class WebApplication:
         if current_user.role not in {Role.ADMIN, Role.PI}:
             body = """
             <section class="stack">
-              <div class="topbar"><div><h2>账号审核</h2><div class="subtle">只有管理员和 PI 可以审核注册申请。</div></div></div>
+              <div class="topbar"><div><h2>账号审核</h2><div class="subtle">只有管理员和 PI 可以审核注册申请和注销申请。</div></div></div>
               <div class="empty-state">当前账号没有审核权限。</div>
             </section>
             """
             return self.render_layout("账号审核", body, active_section="accounts", current_user=current_user, notice=notice)
 
         pending_users = self.auth_store.list_pending_users()
-        rows = "".join(
+        deletion_requested_users = self.auth_store.list_deletion_requested_users()
+
+        # 注册审核表格
+        registration_rows = "".join(
             f"<tr>"
             f"<td>{html.escape(user.display_name)}</td>"
             f"<td>{html.escape(user.username)}</td>"
@@ -1444,25 +1591,65 @@ class WebApplication:
             f"</tr>"
             for user in pending_users
         )
-        table = (
+        registration_table = (
             f"""
             <table class="table">
               <thead><tr><th>姓名</th><th>账号</th><th>注册时间</th><th>操作</th></tr></thead>
-              <tbody>{rows}</tbody>
+              <tbody>{registration_rows}</tbody>
             </table>
             """
-            if rows
-            else '<div class="empty-state">暂无待审核账号。</div>'
+            if registration_rows
+            else '<div class="empty-state">暂无待审核注册申请。</div>'
         )
+
+        # 注销审核表格
+        deletion_rows = "".join(
+            f"<tr>"
+            f"<td>{html.escape(user.display_name)}</td>"
+            f"<td>{html.escape(user.username)}</td>"
+            f"<td>{html.escape(user.deletion_requested_at or '-')}</td>"
+            f"<td>"
+            f"<form method=\"post\" action=\"/accounts/{html.escape(quote(user.username, safe=''))}/approve-deletion\" style=\"display:inline-block;margin-right:8px;\">"
+            f"<button class=\"button primary\" type=\"submit\" onclick=\"return confirm('确认批准注销申请？用户账号和数据将被永久删除。');\">批准注销</button></form>"
+            f"<form method=\"post\" action=\"/accounts/{html.escape(quote(user.username, safe=''))}/reject-deletion\" style=\"display:inline-block;\">"
+            f"<button class=\"button secondary\" type=\"submit\">拒绝</button></form>"
+            f"</td>"
+            f"</tr>"
+            for user in deletion_requested_users
+        )
+        deletion_table = (
+            f"""
+            <table class="table">
+              <thead><tr><th>姓名</th><th>账号</th><th>申请时间</th><th>操作</th></tr></thead>
+              <tbody>{deletion_rows}</tbody>
+            </table>
+            """
+            if deletion_rows
+            else '<div class="empty-state">暂无待审核注销申请。</div>'
+        )
+
         body = f"""
         <section class="stack">
           <div class="topbar">
             <div>
               <h2>账号审核</h2>
-              <div class="subtle">审核通过后，注册者可用姓名和密码登录。</div>
+              <div class="subtle">审核新用户注册申请和用户注销申请。</div>
             </div>
           </div>
-          <article class="card">{table}</article>
+          <article class="card">
+            <div class="panel-title">
+              <h3>注册审核</h3>
+              <span>审核通过后，用户可使用账号密码登录</span>
+            </div>
+            {registration_table}
+          </article>
+          <article class="card">
+            <div class="panel-title">
+              <h3>注销审核</h3>
+              <span>审核通过后，用户账号将被永久删除</span>
+            </div>
+            {deletion_table}
+          </article>
         </section>
         """
         return self.render_layout("账号审核", body, active_section="accounts", current_user=current_user, notice=notice)
@@ -1487,7 +1674,7 @@ class WebApplication:
             f"<td>{self._status_badge(output.review_status)}</td>"
             f"<td>"
             f"<form method=\"post\" action=\"/outputs/{html.escape(output.output_id)}/approve\" style=\"display:inline-block;margin-right:8px;\"><input type=\"hidden\" name=\"comment\" value=\"通过Web审核\" /><input type=\"hidden\" name=\"next\" value=\"/reviews\" /><button class=\"button primary\" type=\"submit\">通过</button></form>"
-            f"<form method=\"post\" action=\"/outputs/{html.escape(output.output_id)}/return\" style=\"display:inline-block;\"><input type=\"hidden\" name=\"comment\" value=\"退回补充材料\" /><input type=\"hidden\" name=\"next\" value=\"/reviews\" /><button class=\"button secondary\" type=\"submit\">退回</button></form>"
+            f"<form method=\"post\" action=\"/outputs/{html.escape(output.output_id)}/return\" style=\"display:inline-block;margin-right:8px;\"><input type=\"hidden\" name=\"comment\" value=\"退回补充材料\" /><input type=\"hidden\" name=\"next\" value=\"/reviews\" /><button class=\"button secondary\" type=\"submit\">退回</button></form>"
             f"</td>"
             f"</tr>"
             for output in pending_outputs
@@ -1551,8 +1738,64 @@ class WebApplication:
         """
         return self.render_layout("项目管理", body, active_section="projects", current_user=current_user)
 
-    def render_outputs_page(self, current_user: WebUser) -> str:
-        outputs = self.repository.list_outputs_for_actor(current_user.role, current_user.member_id)
+    def render_outputs_page(self, current_user: WebUser, search: str = "", output_type_filter: str = "", status_filter: str = "", page: int = 1, page_size: int = 20) -> str:
+        all_outputs = self.repository.list_outputs_for_actor(current_user.role, current_user.member_id)
+
+        # 搜索过滤
+        if search:
+            search_lower = search.lower()
+            all_outputs = [o for o in all_outputs if search_lower in o.title.lower() or search_lower in o.output_id.lower()]
+
+        # 成果类型筛选
+        if output_type_filter:
+            try:
+                filter_type = OutputType(output_type_filter)
+                all_outputs = [o for o in all_outputs if o.output_type == filter_type]
+            except ValueError:
+                pass
+
+        # 审核状态筛选
+        if status_filter:
+            try:
+                filter_status = ReviewStatus(status_filter)
+                all_outputs = [o for o in all_outputs if o.review_status == filter_status]
+            except ValueError:
+                pass
+
+        # 分页
+        total = len(all_outputs)
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+        page = max(1, min(page, total_pages))
+        start = (page - 1) * page_size
+        end = start + page_size
+        outputs = all_outputs[start:end]
+
+        # 构建筛选器HTML
+        type_options = "".join(
+            f'<option value="{ot.value}"{" selected" if output_type_filter == ot.value else ""}>{html.escape(output_type_label(ot))}</option>'
+            for ot in OutputType
+        )
+        status_options = "".join(
+            f'<option value="{st.value}"{" selected" if status_filter == st.value else ""}>{html.escape(review_status_label(st))}</option>'
+            for st in ReviewStatus
+        )
+
+        # 分页导航
+        pagination = ""
+        if total_pages > 1:
+            prev_disabled = ' disabled' if page <= 1 else ''
+            next_disabled = ' disabled' if page >= total_pages else ''
+            pagination = f"""
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;">
+              <div style="color:var(--muted);font-size:0.9rem;">显示 {start + 1}-{min(end, total)} / 共 {total} 条</div>
+              <div style="display:flex;gap:8px;">
+                <a class="button secondary{prev_disabled}" href="/outputs?search={html.escape(search)}&type={html.escape(output_type_filter)}&status={html.escape(status_filter)}&page={page - 1}" {'style="pointer-events:none;opacity:0.5;"' if prev_disabled else ''}>上一页</a>
+                <span style="padding:10px 16px;color:var(--muted);font-size:0.9rem;">第 {page} / {total_pages} 页</span>
+                <a class="button secondary{next_disabled}" href="/outputs?search={html.escape(search)}&type={html.escape(output_type_filter)}&status={html.escape(status_filter)}&page={page + 1}" {'style="pointer-events:none;opacity:0.5;"' if next_disabled else ''}>下一页</a>
+              </div>
+            </div>
+            """
+
         rows = "".join(
             f"<tr>"
             f"<td><a href=\"/outputs/{html.escape(output.output_id)}\">{html.escape(output.output_id)}</a></td>"
@@ -1560,9 +1803,13 @@ class WebApplication:
             f"<td>{html.escape(output_type_label(output.output_type))}</td>"
             f"<td>{self._status_badge(output.review_status)}</td>"
             f"<td>{html.escape(str(output.year) if output.year is not None else '-')}</td>"
+            f"<td>"
+            f"<a class=\"button secondary\" href=\"/outputs/{html.escape(output.output_id)}\" style=\"font-size:0.85rem;padding:6px 12px;\">查看</a>"
+            f"</td>"
             f"</tr>"
             for output in outputs
-        ) or '<tr><td colspan="5" class="muted">暂无成果数据。</td></tr>'
+        ) or '<tr><td colspan="6" class="muted">暂无成果数据。</td></tr>'
+
         body = f"""
         <section class="stack">
           <div class="topbar">
@@ -1575,10 +1822,36 @@ class WebApplication:
             </div>
           </div>
           <article class="card">
+            <form method="get" action="/outputs" style="margin-bottom:16px;">
+              <div class="form-grid">
+                <div class="field">
+                  <label for="search">搜索</label>
+                  <input id="search" name="search" value="{html.escape(search)}" placeholder="输入标题或编号" />
+                </div>
+                <div class="field">
+                  <label for="type">成果类型</label>
+                  <select id="type" name="type" style="width:100%;padding:12px 14px;border-radius:14px;border:1px solid var(--line);">
+                    <option value="">全部类型</option>
+                    {type_options}
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="status">审核状态</label>
+                  <select id="status" name="status" style="width:100%;padding:12px 14px;border-radius:14px;border:1px solid var(--line);">
+                    <option value="">全部状态</option>
+                    {status_options}
+                  </select>
+                </div>
+                <div class="field" style="display:flex;align-items:end;">
+                  <button class="button primary" type="submit">搜索</button>
+                </div>
+              </div>
+            </form>
             <table class="table">
-              <thead><tr><th>编号</th><th>标题</th><th>类型</th><th>状态</th><th>年份</th></tr></thead>
+              <thead><tr><th>编号</th><th>标题</th><th>类型</th><th>状态</th><th>年份</th><th>操作</th></tr></thead>
               <tbody>{rows}</tbody>
             </table>
+            {pagination}
           </article>
         </section>
         """
@@ -1669,14 +1942,27 @@ class WebApplication:
             actions.append(
                 f'<a class="button secondary" href="/outputs/{html.escape(output.output_id)}/edit">编辑</a>'
             )
-            actions.append(
-                f'<form method="post" action="/outputs/{html.escape(output.output_id)}/submit" style="display:inline-block;"><button class="button primary" type="submit">提交审核</button></form>'
-            )
+            if output.review_status == ReviewStatus.DRAFT or output.review_status == ReviewStatus.RETURNED:
+                actions.append(
+                    f'<form method="post" action="/outputs/{html.escape(output.output_id)}/submit" style="display:inline-block;"><button class="button primary" type="submit">提交审核</button></form>'
+                )
         if can_perform(current_user.role, Permission.REVIEW, output=output, actor_member_id=current_user.member_id):
             # 审核后跳转到审核工作台（管理员/PI）或成果列表（普通用户）
             next_page = "/reviews" if current_user.role in {Role.ADMIN, Role.PI} else "/outputs"
+            if output.review_status == ReviewStatus.SUBMITTED:
+                actions.append(
+                    f'<form method="post" action="/outputs/{html.escape(output.output_id)}/approve" style="display:inline-block;"><input type="hidden" name="comment" value="通过Web界面审核通过" /><input type="hidden" name="next" value="{html.escape(next_page)}" /><button class="button primary" type="submit">通过审核</button></form>'
+                )
+                actions.append(
+                    f'<form method="post" action="/outputs/{html.escape(output.output_id)}/return" style="display:inline-block;"><input type="hidden" name="comment" value="退回补充材料" /><input type="hidden" name="next" value="{html.escape(next_page)}" /><button class="button secondary" type="submit">退回</button></form>'
+                )
+            if output.review_status == ReviewStatus.APPROVED:
+                actions.append(
+                    f'<form method="post" action="/outputs/{html.escape(output.output_id)}/archive" style="display:inline-block;"><input type="hidden" name="comment" value="归档" /><input type="hidden" name="next" value="{html.escape(next_page)}" /><button class="button secondary" type="submit">归档</button></form>'
+                )
+        if can_perform(current_user.role, Permission.DELETE, output=output, actor_member_id=current_user.member_id):
             actions.append(
-                f'<form method="post" action="/outputs/{html.escape(output.output_id)}/approve" style="display:inline-block;"><input type="hidden" name="comment" value="通过Web界面审核通过" /><input type="hidden" name="next" value="{html.escape(next_page)}" /><button class="button secondary" type="submit">通过审核</button></form>'
+                f'<form method="post" action="/outputs/{html.escape(output.output_id)}/delete" style="display:inline-block;" onsubmit="return confirm(\'确认删除成果？此操作不可恢复。\');"><button class="button secondary" type="submit" style="color:var(--danger);">删除</button></form>'
             )
         body = f"""
         <section class="stack">
@@ -1795,9 +2081,12 @@ class WebApplication:
         query = fields.get("query", "").strip()
         owner_ids = self._resolve_owner_ids_from_fields(fields, current_user, fields_multi)
         if source_type == "doi":
-            article_data = fetch_article_metadata(doi=query)
+            try:
+                article_data = fetch_article_metadata(doi=query)
+            except Exception as e:
+                raise ValueError(f"DOI 抓取失败：{str(e)}。请检查网络连接或稍后重试。")
             if article_data is None:
-                raise ValueError("未能通过 DOI 抓取到文章信息。")
+                raise ValueError(f"未能通过 DOI '{query}' 抓取到文章信息。请检查 DOI 是否正确，或稍后重试。")
             article = ArticleMetadata(
                 article_type="research_article",
                 journal=article_data.journal or "",
@@ -1816,9 +2105,12 @@ class WebApplication:
                 article=article,
             )
         if source_type == "pmid":
-            article_data = fetch_article_metadata(pmid=query)
+            try:
+                article_data = fetch_article_metadata(pmid=query)
+            except Exception as e:
+                raise ValueError(f"PubMed 抓取失败：{str(e)}。请检查网络连接或稍后重试。")
             if article_data is None:
-                raise ValueError("未能通过 PubMed PMID 抓取到文章信息。")
+                raise ValueError(f"未能通过 PubMed PMID '{query}' 抓取到文章信息。请检查 PMID 是否正确，或稍后重试。")
             article = ArticleMetadata(
                 article_type="research_article",
                 journal=article_data.journal or "",
@@ -1837,9 +2129,12 @@ class WebApplication:
                 article=article,
             )
         if source_type == "patent":
-            patent_data = self._fetch_patent_metadata(query)
+            try:
+                patent_data = self._fetch_patent_metadata(query)
+            except Exception as e:
+                raise ValueError(f"专利抓取失败：{str(e)}。请检查网络连接或稍后重试。")
             if patent_data is None:
-                raise ValueError("未能通过专利号抓取到专利信息。")
+                raise ValueError(f"未能通过专利号 '{query}' 抓取到专利信息。请检查专利号是否正确，或稍后重试。")
             patent = PatentMetadata(
                 patent_number=patent_data.patent_number,
                 application_number=patent_data.application_number,
@@ -2089,6 +2384,64 @@ class WebApplication:
         """
         return self.render_layout(member.name, body, active_section="members", current_user=current_user, notice=notice)
 
+    def render_account_settings_page(self, current_user: WebUser, notice: str = "") -> str:
+        """渲染账号设置页面"""
+        user = self.auth_store.get_user(current_user.username)
+        if user is None:
+            body = '<div class="empty-state">账号信息未找到。</div>'
+            return self.render_layout("账号设置", body, active_section="account", current_user=current_user, notice=notice)
+
+        deletion_status_html = ""
+        deletion_button_html = ""
+        if user.deletion_requested_at:
+            deletion_status_html = f"""
+            <div class="notice" style="background:rgba(239,68,68,0.1);border-color:rgba(239,68,68,0.2);color:var(--danger);">
+              您已于 {html.escape(user.deletion_requested_at)} 申请注销账号，请等待管理员审批。
+            </div>
+            """
+        else:
+            deletion_button_html = """
+            <form method="post" action="/account/request-deletion" style="display:inline-block;" onsubmit="return confirm('确认申请注销账号？注销后需要管理员审批，审批通过后账号将被永久删除。');">
+              <button class="button secondary" type="submit" style="color:var(--danger);">申请注销账号</button>
+            </form>
+            """
+
+        body = f"""
+        <section class="stack">
+          <div class="topbar">
+            <div>
+              <h2>账号设置</h2>
+              <div class="subtle">管理您的账号信息与安全设置。</div>
+            </div>
+          </div>
+          {deletion_status_html}
+          <article class="card">
+            <div class="panel-title">
+              <h3>基本信息</h3>
+            </div>
+            <div class="kv">
+              <div><span>用户名</span><span>{html.escape(user.username)}</span></div>
+              <div><span>显示名称</span><span>{html.escape(user.display_name)}</span></div>
+              <div><span>角色</span><span>{html.escape(role_label(user.role))}</span></div>
+              <div><span>成员编号</span><span>{html.escape(user.member_id)}</span></div>
+              <div><span>账号状态</span><span>{html.escape('正常' if user.account_status == ACCOUNT_STATUS_ACTIVE else '待审核')}</span></div>
+              <div><span>创建时间</span><span>{html.escape(user.created_at or '-')}</span></div>
+            </div>
+          </article>
+          <article class="card">
+            <div class="panel-title">
+              <h3>账号管理</h3>
+              <span>谨慎操作</span>
+            </div>
+            <p class="muted">注销账号后，您的所有数据将被永久删除且无法恢复。注销申请需要管理员审批。</p>
+            <div class="button-row" style="margin-top:16px;">
+              {deletion_button_html}
+            </div>
+          </article>
+        </section>
+        """
+        return self.render_layout("账号设置", body, active_section="account", current_user=current_user, notice=notice)
+
     def render_project_form(
         self, current_user: WebUser, project: Optional[Project] = None, error: str = ""
     ) -> str:
@@ -2103,7 +2456,7 @@ class WebApplication:
         error_html = f'<div class="notice">{html.escape(error)}</div>' if error else ""
         members = self.repository.list_members()
         member_checkboxes = "".join(
-            f'<label style="display:flex;gap:8px;padding:8px;"><input type="checkbox" name="owner_member_ids" value="{html.escape(m.member_id)}"{" checked" if project and m.member_id in project.owner_member_ids else ""} /><span>{html.escape(m.name)} ({html.escape(m.member_id)})</span></label>'
+            f'<label style="display:flex;gap:8px;padding:10px;border-radius:8px;transition:var(--transition);cursor:pointer;"><input type="checkbox" name="owner_member_ids" value="{html.escape(m.member_id)}"{" checked" if project and m.member_id in project.owner_member_ids else ""} style="cursor:pointer;" /><span>{html.escape(m.name)} ({html.escape(m.member_id)})</span></label>'
             for m in members
         )
         body = f"""
@@ -2406,7 +2759,9 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
         return self.server.app  # type: ignore[attr-defined]
 
     def do_GET(self) -> None:  # noqa: N802
-        path = urlparse(self.path).path
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
+        query_params = parse_qs(parsed_url.query)
         user = self.app.get_current_user(self)
 
         if path == "/":
@@ -2447,6 +2802,9 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             return
         if user is None:
             self.app.redirect(self, "/login")
+            return
+        if path == "/account/settings":
+            self._send_html("Account Settings", self.app.render_account_settings_page(user))
             return
         if path == "/export/excel":
             self._handle_excel_export(user)
@@ -2529,7 +2887,14 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             self._send_html(project.name, self.app.render_project_detail(user, project))
             return
         if path == "/outputs":
-            self._send_html("Outputs", self.app.render_outputs_page(user))
+            search = query_params.get("search", [""])[0]
+            output_type_filter = query_params.get("type", [""])[0]
+            status_filter = query_params.get("status", [""])[0]
+            try:
+                page = int(query_params.get("page", ["1"])[0])
+            except ValueError:
+                page = 1
+            self._send_html("Outputs", self.app.render_outputs_page(user, search, output_type_filter, status_filter, page))
             return
         if path == "/import":
             self._send_html("Import", self.app.render_import_page(user))
@@ -2674,6 +3039,20 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
             self._handle_account_approve(user, username)
             return
 
+        if path.startswith("/accounts/") and path.endswith("/approve-deletion"):
+            username = unquote(path[len("/accounts/") : -len("/approve-deletion")].strip("/"))
+            self._handle_account_deletion_approve(user, username)
+            return
+
+        if path.startswith("/accounts/") and path.endswith("/reject-deletion"):
+            username = unquote(path[len("/accounts/") : -len("/reject-deletion")].strip("/"))
+            self._handle_account_deletion_reject(user, username)
+            return
+
+        if path == "/account/request-deletion":
+            self._handle_account_deletion_request(user)
+            return
+
         if path.startswith("/members/") and path.endswith("/promote"):
             member_id = path[len("/members/") : -len("/promote")].strip("/")
             self._handle_member_promote(user, member_id)
@@ -2748,6 +3127,16 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 user,
                 output_id,
                 "return",
+                comment=fields.get("comment", ""),
+                next_path=fields.get("next", ""),
+            )
+            return
+        if path.startswith("/outputs/") and path.endswith("/archive"):
+            output_id = path[len("/outputs/") : -len("/archive")].strip("/")
+            self._handle_output_transition(
+                user,
+                output_id,
+                "archive",
                 comment=fields.get("comment", ""),
                 next_path=fields.get("next", ""),
             )
@@ -2846,6 +3235,75 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
         self._send_html(
             "Pending Accounts",
             self.app.render_pending_accounts_page(user, notice=f"已通过 {approved.display_name} 的注册申请。"),
+        )
+
+    def _handle_account_deletion_request(self, user: WebUser) -> None:
+        """处理用户申请注销账号"""
+        try:
+            self.app.auth_store.request_account_deletion(user.username)
+        except (ValueError, KeyError) as exc:
+            self._send_html(
+                "Account Settings",
+                self.app.render_account_settings_page(user, notice=str(exc)),
+                status=400,
+            )
+            return
+        self._send_html(
+            "Account Settings",
+            self.app.render_account_settings_page(user, notice="注销申请已提交，请等待管理员审批。"),
+        )
+
+    def _handle_account_deletion_approve(self, user: WebUser, username: str) -> None:
+        """处理管理员批准注销申请"""
+        if user.role not in {Role.ADMIN, Role.PI}:
+            self._send_html(
+                "Pending Accounts",
+                self.app.render_pending_accounts_page(user, notice="当前账号没有审核权限。"),
+                status=403,
+            )
+            return
+        try:
+            # 获取待删除用户信息
+            user_to_delete = self.app.auth_store.get_user(username)
+            if user_to_delete is None:
+                raise KeyError(f"用户不存在：{username}")
+            display_name = user_to_delete.display_name
+
+            # 批准注销并删除账号
+            self.app.auth_store.approve_account_deletion(username, approved_by=user.username)
+        except (ValueError, KeyError) as exc:
+            self._send_html(
+                "Pending Accounts",
+                self.app.render_pending_accounts_page(user, notice=str(exc)),
+                status=400,
+            )
+            return
+        self._send_html(
+            "Pending Accounts",
+            self.app.render_pending_accounts_page(user, notice=f"已批准 {display_name} 的注销申请，账号已删除。"),
+        )
+
+    def _handle_account_deletion_reject(self, user: WebUser, username: str) -> None:
+        """处理管理员拒绝注销申请"""
+        if user.role not in {Role.ADMIN, Role.PI}:
+            self._send_html(
+                "Pending Accounts",
+                self.app.render_pending_accounts_page(user, notice="当前账号没有审核权限。"),
+                status=403,
+            )
+            return
+        try:
+            rejected = self.app.auth_store.reject_account_deletion(username)
+        except (ValueError, KeyError) as exc:
+            self._send_html(
+                "Pending Accounts",
+                self.app.render_pending_accounts_page(user, notice=str(exc)),
+                status=400,
+            )
+            return
+        self._send_html(
+            "Pending Accounts",
+            self.app.render_pending_accounts_page(user, notice=f"已拒绝 {rejected.display_name} 的注销申请。"),
         )
 
     def _handle_project_add(self, user: WebUser, fields: Dict[str, str], fields_multi: Dict[str, List[str]]) -> None:
@@ -3128,6 +3586,13 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                     actor_member_id=user.member_id,
                     comment=comment or "Returned from web UI.",
                 )
+            elif action == "archive":
+                self.app.repository.archive_output(
+                    output_id,
+                    actor_role=user.role,
+                    actor_member_id=user.member_id,
+                    comment=comment or "Archived from web UI.",
+                )
             else:
                 raise ValueError(f"Unsupported action: {action}")
         except (KeyError, PermissionError, ValueError) as exc:
@@ -3138,7 +3603,7 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 return
             self._send_html(output.title, self.app.render_output_detail(user, output, notice=str(exc)), status=400)
             return
-        if not next_path and action in {"approve", "return"}:
+        if not next_path and action in {"approve", "return", "archive"}:
             next_path = "/reviews" if user.role in {Role.ADMIN, Role.PI} else f"/outputs/{output_id}"
         self.app.redirect(self, next_path or f"/outputs/{output_id}")
 
