@@ -1,11 +1,11 @@
 #!/bin/bash
-# 科研成果管理系统 - Ubuntu 服务器部署脚本
+# 科研成果管理软件 - Ubuntu 服务器部署脚本
 # 支持内网 + Cloudflare Tunnel 外网访问
 # 生成时间：2026-06-24
 
 set -e
 
-echo "🚀 开始部署科研成果管理系统（Ubuntu + 外网访问）"
+echo "🚀 开始部署科研成果管理软件（Ubuntu + 外网访问）"
 echo "================================================"
 echo ""
 
@@ -414,7 +414,7 @@ echo ""
 # 创建日常管理脚本
 cat > manage.sh << 'MANAGE_EOF'
 #!/bin/bash
-# 科研成果管理系统 - 日常管理脚本
+# 科研成果管理软件 - 日常管理脚本
 
 case "$1" in
   start)
@@ -455,7 +455,7 @@ case "$1" in
     echo "✅ 更新完成"
     ;;
   *)
-    echo "科研成果管理系统 - 管理脚本"
+    echo "科研成果管理软件 - 管理脚本"
     echo ""
     echo "用法：./manage.sh [命令]"
     echo ""

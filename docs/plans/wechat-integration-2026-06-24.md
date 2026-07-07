@@ -1,4 +1,4 @@
-# 科研成果管理系统 - 微信集成方案
+# 科研成果管理软件 - 微信集成方案
 
 > **制定时间：** 2026-06-24  
 > **目标：** 让课题组成员通过微信便捷访问和使用系统
@@ -50,7 +50,7 @@ https://research.your-domain.com
 
 ```html
 <!-- 微信分享优化 -->
-<meta property="og:title" content="课题组科研成果管理系统" />
+<meta property="og:title" content="课题组科研成果管理软件" />
 <meta property="og:description" content="文献、专利、项目统一管理平台" />
 <meta property="og:image" content="https://research.your-domain.com/logo.png" />
 <meta property="og:url" content="https://research.your-domain.com" />
@@ -96,7 +96,7 @@ if (!localStorage.getItem('hideAddToHomeTip')) {
 **给课题组成员的使用指南：**
 
 ```markdown
-# 如何在微信中使用科研成果管理系统
+# 如何在微信中使用科研成果管理软件
 
 ## 方式 1：直接访问（推荐）
 

@@ -1,11 +1,11 @@
 #!/bin/bash
-# 科研成果管理系统 - Singularity 部署脚本
+# 科研成果管理软件 - Singularity 部署脚本
 # 适用于 Ubuntu 20.04+ 服务器
 # 生成时间：2026-06-24
 
 set -e
 
-echo "🚀 开始部署科研成果管理系统（Singularity 版本）"
+echo "🚀 开始部署科研成果管理软件（Singularity 版本）"
 echo "================================================"
 echo ""
 
@@ -130,10 +130,10 @@ From: python:3.11-slim
 %labels
     Author Research Group
     Version 1.0
-    Description 科研成果管理系统
+    Description 科研成果管理软件
 
 %help
-    这是科研成果管理系统的 Singularity 容器
+    这是科研成果管理软件的 Singularity 容器
 
     使用方法：
     singularity run --bind ./data/local:/data research-manager.sif
@@ -178,7 +178,7 @@ echo -e "${YELLOW}🔧 步骤 6/6：启动服务${NC}"
 # 创建启动脚本
 cat > start-service.sh << 'START_SCRIPT_EOF'
 #!/bin/bash
-# 科研成果管理系统启动脚本
+# 科研成果管理软件启动脚本
 
 # 检查是否已在运行
 if [ -f singularity.pid ]; then
@@ -210,7 +210,7 @@ chmod +x start-service.sh
 # 创建停止脚本
 cat > stop-service.sh << 'STOP_SCRIPT_EOF'
 #!/bin/bash
-# 科研成果管理系统停止脚本
+# 科研成果管理软件停止脚本
 
 if [ ! -f singularity.pid ]; then
     echo "服务未运行"
@@ -241,7 +241,7 @@ chmod +x stop-service.sh
 # 创建重启脚本
 cat > restart-service.sh << 'RESTART_SCRIPT_EOF'
 #!/bin/bash
-# 科研成果管理系统重启脚本
+# 科研成果管理软件重启脚本
 
 ./stop-service.sh
 sleep 2
@@ -253,7 +253,7 @@ chmod +x restart-service.sh
 # 创建管理脚本
 cat > manage.sh << 'MANAGE_SCRIPT_EOF'
 #!/bin/bash
-# 科研成果管理系统管理脚本
+# 科研成果管理软件管理脚本
 
 case "$1" in
     start)
@@ -298,7 +298,7 @@ case "$1" in
             singularity/research-manager.sif
         ;;
     *)
-        echo "科研成果管理系统 - 管理脚本"
+        echo "科研成果管理软件 - 管理脚本"
         echo ""
         echo "用法：./manage.sh [命令]"
         echo ""
