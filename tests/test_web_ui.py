@@ -76,6 +76,81 @@ class WebUiTests(TestCase):
             self.assertIn("论文", dashboard)
             self.assertIn("导出Excel", dashboard)
 
+    def test_default_workspace_name_uses_software_wording(self) -> None:
+        from lab_literature_manager.web import DEFAULT_WORKSPACE_NAME
+
+        self.assertEqual(DEFAULT_WORKSPACE_NAME, "科研成果管理软件")
+        self.assertNotIn("科研成果管理系统", DEFAULT_WORKSPACE_NAME)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fresh = WebApplication(
+                data_dir=Path(tmp_dir) / "fresh-data",
+                auth_path=Path(tmp_dir) / "fresh-auth" / "web_auth.json",
+            )
+            setup_html = fresh.render_setup_page()
+            self.assertIn("科研成果管理软件", setup_html)
+            self.assertNotIn("科研成果管理系统", setup_html)
+
+    def test_dashboard_metric_cards_link_to_functions_for_admin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app = self._build_app(tmp_dir)
+            admin = app.auth_store.authenticate("admin", "ChangeMe123")
+
+            dashboard = app.render_dashboard(admin)  # type: ignore[arg-type]
+            # 指标卡片可点击直达对应功能
+            self.assertIn('href="/outputs"', dashboard)
+            self.assertIn('href="/members"', dashboard)
+            self.assertIn('href="/projects"', dashboard)
+            self.assertIn('href="/outputs?status=approved"', dashboard)
+            # 采用可点击卡片样式类，便于视觉提示
+            self.assertIn("metric-card-link", dashboard)
+
+    def test_dashboard_metric_cards_hide_admin_links_for_member(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app = self._build_app(tmp_dir)
+            alice = app.auth_store.create_user(
+                "alice", "MemberPass123", display_name="Alice Zhang", role=Role.MEMBER
+            )
+
+            dashboard = app.render_dashboard(alice)
+            # 普通成员可直达成果，但不应出现会 403 的管理端直链
+            self.assertIn('href="/outputs"', dashboard)
+            self.assertNotIn('href="/members"', dashboard)
+            self.assertNotIn('href="/projects"', dashboard)
+
+    def test_dashboard_quick_action_buttons_link_to_admin_features(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app = self._build_app(tmp_dir)
+            admin = app.auth_store.authenticate("admin", "ChangeMe123")
+            assert admin is not None
+
+            dashboard = app.render_dashboard(admin)
+            self.assertIn("快捷入口", dashboard)
+            self.assertIn('href="/outputs/add"', dashboard)
+            self.assertIn('href="/import"', dashboard)
+            self.assertIn('href="/reviews"', dashboard)
+            self.assertIn('href="/accounts/pending"', dashboard)
+            self.assertIn('href="/members"', dashboard)
+            self.assertIn('href="/projects"', dashboard)
+            self.assertIn('href="/account/settings"', dashboard)
+            self.assertIn("quick-action-grid", dashboard)
+
+    def test_dashboard_quick_action_buttons_hide_manager_only_entries_for_member(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app = self._build_app(tmp_dir)
+            alice = app.auth_store.create_user(
+                "alice", "MemberPass123", display_name="Alice Zhang", role=Role.MEMBER
+            )
+
+            dashboard = app.render_dashboard(alice)
+            self.assertIn("快捷入口", dashboard)
+            self.assertIn('href="/outputs/add"', dashboard)
+            self.assertIn('href="/import"', dashboard)
+            self.assertIn('href="/account/settings"', dashboard)
+            self.assertNotIn('href="/reviews"', dashboard)
+            self.assertNotIn('href="/accounts/pending"', dashboard)
+            self.assertNotIn('href="/members"', dashboard)
+            self.assertNotIn('href="/projects"', dashboard)
+
     def test_login_captcha_validation_and_setup_page_are_generic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             app = self._build_app(tmp_dir)

@@ -48,7 +48,7 @@ CAPTCHA_TTL_MINUTES = 10
 CAPTCHA_DIGITS = 4
 ACCOUNT_STATUS_ACTIVE = "active"
 ACCOUNT_STATUS_PENDING = "pending"
-DEFAULT_WORKSPACE_NAME = "科研成果管理系统"
+DEFAULT_WORKSPACE_NAME = "科研成果管理软件"
 WORKSPACE_SETTINGS_FILE = "workspace_settings.json"
 CSRF_TOKEN_NAME = "csrf_token"
 CSRF_TTL_HOURS = 8
@@ -749,6 +749,11 @@ class WebApplication:
     .cards {{
       grid-template-columns: repeat(4, minmax(0, 1fr));
     }}
+    .quick-action-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+    }}
     .card {{
       background: var(--panel);
       border: 1px solid var(--line);
@@ -778,6 +783,53 @@ class WebApplication:
       margin-top: 8px;
       color: var(--muted);
       font-size: 0.85rem;
+    }}
+    a.metric-card-link {{
+      display: block;
+      position: relative;
+      cursor: pointer;
+    }}
+    a.metric-card-link:hover {{
+      box-shadow: var(--shadow);
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }}
+    a.metric-card-link .metric-cta {{
+      margin-top: 12px;
+      color: var(--accent-strong);
+      font-size: 0.82rem;
+      font-weight: 600;
+      opacity: 0;
+      transition: var(--transition);
+    }}
+    a.metric-card-link:hover .metric-cta {{
+      opacity: 1;
+    }}
+    a.quick-action-link {{
+      display: grid;
+      gap: 8px;
+      min-height: 132px;
+      color: var(--text);
+      background: linear-gradient(180deg, rgba(224, 242, 254, 0.5), rgba(255, 255, 255, 0.96));
+    }}
+    a.quick-action-link:hover {{
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow);
+    }}
+    .quick-action-link strong {{
+      font-size: 1rem;
+    }}
+    .quick-action-link span {{
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }}
+    .quick-action-link .quick-action-cta {{
+      margin-top: auto;
+      color: var(--accent-strong);
+      font-size: 0.84rem;
+      font-weight: 600;
     }}
     .panels {{
       grid-template-columns: 1.4fr 0.9fr;
@@ -1441,7 +1493,7 @@ class WebApplication:
               <form method="post" action="/setup">
                 <div class="field">
                   <label for="workspace_name">组织名称</label>
-                  <input id="workspace_name" name="workspace_name" value="{html.escape(DEFAULT_WORKSPACE_NAME)}" placeholder="例如：马老师课题组、科研成果管理系统" required />
+                  <input id="workspace_name" name="workspace_name" value="{html.escape(DEFAULT_WORKSPACE_NAME)}" placeholder="例如：马老师课题组、科研成果管理软件" required />
                 </div>
                 <div class="field">
                   <label for="workspace_subtitle">工作台副标题</label>
@@ -1477,6 +1529,26 @@ class WebApplication:
         type_counts = self._count_labels((output_type_label(output.output_type) for output in outputs))
         status_counts = self._count_labels((review_status_label(output.review_status) for output in outputs))
         year_counts = self._count_labels((str(output.year) for output in outputs if output.year is not None))
+        is_manager = current_user.role in {Role.ADMIN, Role.PI}
+        members_href = "/members" if is_manager else None
+        projects_href = "/projects" if is_manager else None
+        quick_actions = [
+            self._dashboard_quick_action("成果列表", "查看当前账号可见的全部成果记录。", "/outputs"),
+            self._dashboard_quick_action("新增成果", "直接进入成果录入表单。", "/outputs/add"),
+            self._dashboard_quick_action("外部抓取", "通过 DOI、PubMed 或专利号快速预填。", "/import"),
+            self._dashboard_quick_action("账号设置", "管理密码与账号注销申请。", "/account/settings"),
+        ]
+        if is_manager:
+            quick_actions[0:0] = [
+                self._dashboard_quick_action("审核工作台", "集中处理待审核成果。", "/reviews"),
+                self._dashboard_quick_action("账号审核", "审批注册与注销申请。", "/accounts/pending"),
+            ]
+            quick_actions.extend(
+                [
+                    self._dashboard_quick_action("成员管理", "维护成员档案与角色。", "/members"),
+                    self._dashboard_quick_action("项目管理", "查看和维护项目台账。", "/projects"),
+                ]
+            )
         body = f"""
         <section class="stack">
           <div class="topbar">
@@ -1490,11 +1562,18 @@ class WebApplication:
             </div>
           </div>
           <div class="grid cards">
-            {self._metric_card("总成果数", str(len(outputs)), "当前账号可见成果")}
-            {self._metric_card("成员数", str(len(members)), "本地成员档案")}
-            {self._metric_card("项目数", str(len(projects)), "关联项目与课题")}
-            {self._metric_card("已审核", str(status_counts.get(review_status_label(ReviewStatus.APPROVED), 0)), "已通过审核")}
+            {self._metric_card("总成果数", str(len(outputs)), "当前账号可见成果", href="/outputs")}
+            {self._metric_card("成员数", str(len(members)), "本地成员档案", href=members_href)}
+            {self._metric_card("项目数", str(len(projects)), "关联项目与课题", href=projects_href)}
+            {self._metric_card("已审核", str(status_counts.get(review_status_label(ReviewStatus.APPROVED), 0)), "已通过审核", href="/outputs?status=approved")}
           </div>
+          <article class="card">
+            <div class="panel-title">
+              <h3>快捷入口</h3>
+              <span>点击按钮直达对应功能</span>
+            </div>
+            <div class="quick-action-grid">{''.join(quick_actions)}</div>
+          </article>
           <div class="grid panels">
             <article class="card">
               <div class="panel-title">
@@ -2218,13 +2297,29 @@ class WebApplication:
     def _apply_fetched_output(self, output: ResearchOutput) -> ResearchOutput:
         return output
 
-    def _metric_card(self, label: str, value: str, hint: str) -> str:
-        return f"""
-        <article class="card">
+    def _metric_card(self, label: str, value: str, hint: str, href: Optional[str] = None) -> str:
+        inner = f"""
           <div class="metric-label">{html.escape(label)}</div>
           <div class="metric-value">{html.escape(value)}</div>
           <div class="metric-hint">{html.escape(hint)}</div>
-        </article>
+        """
+        if href:
+            return f"""
+        <a class="card metric-card-link" href="{html.escape(href)}">{inner}
+          <div class="metric-cta">进入 →</div>
+        </a>
+        """
+        return f"""
+        <article class="card">{inner}</article>
+        """
+
+    def _dashboard_quick_action(self, title: str, description: str, href: str) -> str:
+        return f"""
+        <a class="card quick-action-link" href="{html.escape(href)}">
+          <strong>{html.escape(title)}</strong>
+          <span>{html.escape(description)}</span>
+          <div class="quick-action-cta">立即前往</div>
+        </a>
         """
 
     def _export_button(self, current_user: WebUser) -> str:
