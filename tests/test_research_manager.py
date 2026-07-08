@@ -24,6 +24,7 @@ from lab_literature_manager import (
     ResearchRepository,
     ReviewStatus,
     Role,
+    SoftwareCopyrightMetadata,
     can_perform,
 )
 from lab_literature_manager.constants import DEFAULT_DATA_DIR
@@ -394,6 +395,39 @@ class CliTests(unittest.TestCase):
             )
             self.assertNotEqual(add_result.returncode, 0)
             self.assertIn("actor-id is required", add_result.stderr)
+
+    def test_software_copyright_output_with_metadata(self) -> None:
+        """Test software copyright output creation and serialization."""
+        output = ResearchOutput(
+            output_id="RZ-2026-001",
+            title="科研成果管理软件V1.0",
+            output_type=OutputType.SOFTWARE_COPYRIGHT,
+            owner_member_ids=["dev-001"],
+            year=2026,
+            software_copyright=SoftwareCopyrightMetadata(
+                registration_number="软著登字第1234567号",
+                full_software_name="科研成果管理软件V1.0",
+                version_number="V1.0",
+                development_completion_date="2026-06-01",
+                first_publication_date="2026-07-01",
+            ),
+        )
+        self.assertEqual(output.output_id, "RZ-2026-001")
+        self.assertEqual(output.output_type, OutputType.SOFTWARE_COPYRIGHT)
+        self.assertIsNotNone(output.software_copyright)
+        self.assertEqual(output.software_copyright.registration_number, "软著登字第1234567号")
+        self.assertEqual(output.software_copyright.version_number, "V1.0")
+
+        # Test serialization
+        output_dict = output.to_dict()
+        self.assertIn("software_copyright", output_dict)
+        self.assertEqual(output_dict["software_copyright"]["registration_number"], "软著登字第1234567号")
+
+        # Test deserialization
+        restored = ResearchOutput.from_dict(output_dict)
+        self.assertEqual(restored.output_id, "RZ-2026-001")
+        self.assertIsNotNone(restored.software_copyright)
+        self.assertEqual(restored.software_copyright.registration_number, "软著登字第1234567号")
 
 
 if __name__ == "__main__":

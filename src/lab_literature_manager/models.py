@@ -280,6 +280,43 @@ class PatentMetadata:
 
 
 @dataclass(frozen=True)
+class SoftwareCopyrightMetadata:
+    """Software copyright-specific metadata for software copyright outputs."""
+
+    registration_number: str = ""
+    full_software_name: str = ""
+    version_number: str = ""
+    development_completion_date: str = ""
+    first_publication_date: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "registration_number", _clean_text(self.registration_number))
+        object.__setattr__(self, "full_software_name", _clean_text(self.full_software_name))
+        object.__setattr__(self, "version_number", _clean_text(self.version_number))
+        object.__setattr__(self, "development_completion_date", _clean_text(self.development_completion_date))
+        object.__setattr__(self, "first_publication_date", _clean_text(self.first_publication_date))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "registration_number": self.registration_number,
+            "full_software_name": self.full_software_name,
+            "version_number": self.version_number,
+            "development_completion_date": self.development_completion_date,
+            "first_publication_date": self.first_publication_date,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SoftwareCopyrightMetadata":
+        return cls(
+            registration_number=str(data.get("registration_number", "")),
+            full_software_name=str(data.get("full_software_name", "")),
+            version_number=str(data.get("version_number", "")),
+            development_completion_date=str(data.get("development_completion_date", "")),
+            first_publication_date=str(data.get("first_publication_date", "")),
+        )
+
+
+@dataclass(frozen=True)
 class Member:
     """Research group member."""
 
@@ -391,6 +428,7 @@ class ResearchOutput:
     review_status: ReviewStatus = ReviewStatus.DRAFT
     article: Optional[ArticleMetadata] = None
     patent: Optional[PatentMetadata] = None
+    software_copyright: Optional[SoftwareCopyrightMetadata] = None
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
 
@@ -426,6 +464,10 @@ class ResearchOutput:
             object.__setattr__(self, "patent", self.patent)
         elif self.patent is not None and self.output_type != OutputType.PATENT:
             raise ValueError("Only patent outputs may include patent metadata.")
+        if self.output_type == OutputType.SOFTWARE_COPYRIGHT and self.software_copyright is not None:
+            object.__setattr__(self, "software_copyright", self.software_copyright)
+        elif self.software_copyright is not None and self.output_type != OutputType.SOFTWARE_COPYRIGHT:
+            raise ValueError("Only software copyright outputs may include software copyright metadata.")
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -442,6 +484,7 @@ class ResearchOutput:
             "review_status": self.review_status.value,
             "article": self.article.to_dict() if self.article else None,
             "patent": self.patent.to_dict() if self.patent else None,
+            "software_copyright": self.software_copyright.to_dict() if self.software_copyright else None,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -463,6 +506,7 @@ class ResearchOutput:
             review_status=ReviewStatus(str(data.get("review_status", ReviewStatus.DRAFT.value))),
             article=ArticleMetadata.from_dict(article) if isinstance(article, dict) else None,
             patent=PatentMetadata.from_dict(data["patent"]) if isinstance(data.get("patent"), dict) else None,
+            software_copyright=SoftwareCopyrightMetadata.from_dict(data["software_copyright"]) if isinstance(data.get("software_copyright"), dict) else None,
             created_at=str(data.get("created_at", utc_now_iso())),
             updated_at=str(data.get("updated_at", data.get("created_at", utc_now_iso()))),
         )

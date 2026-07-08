@@ -5,12 +5,14 @@ from .models import (
     AuditLog,
     Member,
     OutputType,
+    PatentMetadata,
     Permission,
     Project,
     ResearchOutput,
     ReviewRecord,
     ReviewStatus,
     Role,
+    SoftwareCopyrightMetadata,
 )
 from .permissions import can_perform
 from .repository import ResearchRepository
@@ -21,6 +23,7 @@ __all__ = [
     "AuditLog",
     "Member",
     "OutputType",
+    "PatentMetadata",
     "Permission",
     "Project",
     "ResearchOutput",
@@ -28,6 +31,7 @@ __all__ = [
     "ReviewRecord",
     "ReviewStatus",
     "Role",
+    "SoftwareCopyrightMetadata",
     "LocalAuthStore",
     "create_web_server",
     "can_perform",
