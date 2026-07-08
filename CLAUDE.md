@@ -12,3 +12,4 @@
 - 避免无关重构；修改 `AGENTS.md` 后更新 `CHANGELOG.md`
 - 与 `AGENTS.md` 保持一致：涉及 UI、权限、抓取、认证和数据流时，优先测试先行并完成运行验证
 - 与 `AGENTS.md` 保持一致：当用户明确要求整包规则时，必须执行 `awesome-code` 门禁流程、自主决策不追问，并在交付前完成可运行验证
+- 与 `AGENTS.md` 保持一致：当用户要求把该整包规则写入 `AGENTS.md` 时，必须同步检查 `CLAUDE.md` 核心约束并更新 `CHANGELOG.md`
