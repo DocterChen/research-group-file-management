@@ -117,24 +117,21 @@ class WebUiTests(TestCase):
             self.assertNotIn('href="/members"', dashboard)
             self.assertNotIn('href="/projects"', dashboard)
 
-    def test_dashboard_quick_action_buttons_link_to_admin_features(self) -> None:
+    def test_dashboard_no_longer_renders_quick_action_section(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             app = self._build_app(tmp_dir)
             admin = app.auth_store.authenticate("admin", "ChangeMe123")
             assert admin is not None
 
             dashboard = app.render_dashboard(admin)
-            self.assertIn("快捷入口", dashboard)
-            self.assertIn('href="/outputs/add"', dashboard)
-            self.assertIn('href="/import"', dashboard)
-            self.assertIn('href="/reviews"', dashboard)
-            self.assertIn('href="/accounts/pending"', dashboard)
+            self.assertNotIn("快捷入口", dashboard)
+            self.assertNotIn("quick-action-grid", dashboard)
+            self.assertIn('href="/outputs"', dashboard)
             self.assertIn('href="/members"', dashboard)
             self.assertIn('href="/projects"', dashboard)
-            self.assertIn('href="/account/settings"', dashboard)
-            self.assertIn("quick-action-grid", dashboard)
+            self.assertIn('href="/outputs?status=approved"', dashboard)
 
-    def test_dashboard_quick_action_buttons_hide_manager_only_entries_for_member(self) -> None:
+    def test_dashboard_member_view_has_metric_links_without_quick_action_section(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             app = self._build_app(tmp_dir)
             alice = app.auth_store.create_user(
@@ -142,14 +139,22 @@ class WebUiTests(TestCase):
             )
 
             dashboard = app.render_dashboard(alice)
-            self.assertIn("快捷入口", dashboard)
-            self.assertIn('href="/outputs/add"', dashboard)
-            self.assertIn('href="/import"', dashboard)
-            self.assertIn('href="/account/settings"', dashboard)
-            self.assertNotIn('href="/reviews"', dashboard)
-            self.assertNotIn('href="/accounts/pending"', dashboard)
+            self.assertNotIn("快捷入口", dashboard)
+            self.assertNotIn("quick-action-grid", dashboard)
+            self.assertIn('href="/outputs"', dashboard)
             self.assertNotIn('href="/members"', dashboard)
             self.assertNotIn('href="/projects"', dashboard)
+
+    def test_output_form_uses_stable_people_selector_classes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            app = self._build_app(tmp_dir)
+            admin = app.auth_store.authenticate("admin", "ChangeMe123")
+            assert admin is not None
+
+            form_html = app.render_output_form(admin)
+            self.assertIn("person-selector", form_html)
+            self.assertIn("person-option-label", form_html)
+            self.assertIn("person-option-text", form_html)
 
     def test_login_captcha_validation_and_setup_page_are_generic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

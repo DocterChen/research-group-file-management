@@ -33,6 +33,7 @@ from .models import (
     ResearchOutput,
     ReviewStatus,
     Role,
+    SoftwareCopyrightMetadata,
     output_type_label,
     review_status_label,
     role_label,
@@ -749,11 +750,6 @@ class WebApplication:
     .cards {{
       grid-template-columns: repeat(4, minmax(0, 1fr));
     }}
-    .quick-action-grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 14px;
-    }}
     .card {{
       background: var(--panel);
       border: 1px solid var(--line);
@@ -804,32 +800,6 @@ class WebApplication:
     }}
     a.metric-card-link:hover .metric-cta {{
       opacity: 1;
-    }}
-    a.quick-action-link {{
-      display: grid;
-      gap: 8px;
-      min-height: 132px;
-      color: var(--text);
-      background: linear-gradient(180deg, rgba(224, 242, 254, 0.5), rgba(255, 255, 255, 0.96));
-    }}
-    a.quick-action-link:hover {{
-      border-color: var(--accent);
-      transform: translateY(-2px);
-      box-shadow: var(--shadow);
-    }}
-    .quick-action-link strong {{
-      font-size: 1rem;
-    }}
-    .quick-action-link span {{
-      color: var(--muted);
-      font-size: 0.9rem;
-      line-height: 1.5;
-    }}
-    .quick-action-link .quick-action-cta {{
-      margin-top: auto;
-      color: var(--accent-strong);
-      font-size: 0.84rem;
-      font-weight: 600;
     }}
     .panels {{
       grid-template-columns: 1.4fr 0.9fr;
@@ -1223,6 +1193,42 @@ class WebApplication:
     .form-grid .span-2 {{
       grid-column: 1 / -1;
     }}
+    .person-selector {{
+      display: grid;
+      gap: 6px;
+      padding: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+    }}
+    .person-option-label {{
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: var(--transition);
+      min-width: 0;
+    }}
+    .person-option-label:hover {{
+      background: var(--panel-soft);
+    }}
+    .person-option-label input {{
+      width: auto;
+      margin: 3px 0 0;
+      flex: 0 0 auto;
+      cursor: pointer;
+    }}
+    .person-option-text {{
+      min-width: 0;
+      color: var(--text);
+      line-height: 1.45;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
+    }}
     .kv {{
       display: grid;
       gap: 8px;
@@ -1532,23 +1538,6 @@ class WebApplication:
         is_manager = current_user.role in {Role.ADMIN, Role.PI}
         members_href = "/members" if is_manager else None
         projects_href = "/projects" if is_manager else None
-        quick_actions = [
-            self._dashboard_quick_action("成果列表", "查看当前账号可见的全部成果记录。", "/outputs"),
-            self._dashboard_quick_action("新增成果", "直接进入成果录入表单。", "/outputs/add"),
-            self._dashboard_quick_action("外部抓取", "通过 DOI、PubMed 或专利号快速预填。", "/import"),
-            self._dashboard_quick_action("账号设置", "管理密码与账号注销申请。", "/account/settings"),
-        ]
-        if is_manager:
-            quick_actions[0:0] = [
-                self._dashboard_quick_action("审核工作台", "集中处理待审核成果。", "/reviews"),
-                self._dashboard_quick_action("账号审核", "审批注册与注销申请。", "/accounts/pending"),
-            ]
-            quick_actions.extend(
-                [
-                    self._dashboard_quick_action("成员管理", "维护成员档案与角色。", "/members"),
-                    self._dashboard_quick_action("项目管理", "查看和维护项目台账。", "/projects"),
-                ]
-            )
         body = f"""
         <section class="stack">
           <div class="topbar">
@@ -1567,13 +1556,6 @@ class WebApplication:
             {self._metric_card("项目数", str(len(projects)), "关联项目与课题", href=projects_href)}
             {self._metric_card("已审核", str(status_counts.get(review_status_label(ReviewStatus.APPROVED), 0)), "已通过审核", href="/outputs?status=approved")}
           </div>
-          <article class="card">
-            <div class="panel-title">
-              <h3>快捷入口</h3>
-              <span>点击按钮直达对应功能</span>
-            </div>
-            <div class="quick-action-grid">{''.join(quick_actions)}</div>
-          </article>
           <div class="grid panels">
             <article class="card">
               <div class="panel-title">
@@ -2313,15 +2295,6 @@ class WebApplication:
         <article class="card">{inner}</article>
         """
 
-    def _dashboard_quick_action(self, title: str, description: str, href: str) -> str:
-        return f"""
-        <a class="card quick-action-link" href="{html.escape(href)}">
-          <strong>{html.escape(title)}</strong>
-          <span>{html.escape(description)}</span>
-          <div class="quick-action-cta">立即前往</div>
-        </a>
-        """
-
     def _export_button(self, current_user: WebUser) -> str:
         if not can_perform(current_user.role, Permission.EXPORT, actor_member_id=current_user.member_id):
             return ""
@@ -2383,6 +2356,18 @@ class WebApplication:
                   <div><span>申请号</span><span>{html.escape(output.patent.application_number or '-')}</span></div>
                   <div><span>国家/地区</span><span>{html.escape(output.patent.country_code or '-')}</span></div>
                   <div><span>状态</span><span>{html.escape(output.patent.status or '-')}</span></div>
+                </div>
+                """
+            )
+        if output.software_copyright:
+            chunks.append(
+                f"""
+                <div class="kv">
+                  <div><span>登记号</span><span>{html.escape(output.software_copyright.registration_number or '-')}</span></div>
+                  <div><span>软件全称</span><span>{html.escape(output.software_copyright.full_software_name or '-')}</span></div>
+                  <div><span>版本号</span><span>{html.escape(output.software_copyright.version_number or '-')}</span></div>
+                  <div><span>开发完成日期</span><span>{html.escape(output.software_copyright.development_completion_date or '-')}</span></div>
+                  <div><span>首次发表日期</span><span>{html.escape(output.software_copyright.first_publication_date or '-')}</span></div>
                 </div>
                 """
             )
@@ -2669,22 +2654,24 @@ class WebApplication:
         )
         members = self.repository.list_members()
         owner_checkboxes = "".join(
-            f'<label style="display:flex;gap:8px;padding:8px;"><input type="checkbox" name="owner_member_ids" value="{html.escape(m.member_id)}"{" checked" if output and m.member_id in output.owner_member_ids else ""} /><span>{html.escape(m.name)} ({html.escape(m.member_id)})</span></label>'
+            f'<label class="person-option-label"><input type="checkbox" name="owner_member_ids" value="{html.escape(m.member_id)}"{" checked" if output and m.member_id in output.owner_member_ids else ""} /><span class="person-option-text">{html.escape(m.name)} ({html.escape(m.member_id)})</span></label>'
             for m in members
         )
         participant_checkboxes = "".join(
-            f'<label style="display:flex;gap:8px;padding:8px;"><input type="checkbox" name="participant_member_ids" value="{html.escape(m.member_id)}"{" checked" if output and m.member_id in output.participant_member_ids else ""} /><span>{html.escape(m.name)} ({html.escape(m.member_id)})</span></label>'
+            f'<label class="person-option-label"><input type="checkbox" name="participant_member_ids" value="{html.escape(m.member_id)}"{" checked" if output and m.member_id in output.participant_member_ids else ""} /><span class="person-option-text">{html.escape(m.name)} ({html.escape(m.member_id)})</span></label>'
             for m in members
         )
         projects = self.repository.list_projects()
         project_checkboxes = "".join(
-            f'<label style="display:flex;gap:8px;padding:8px;"><input type="checkbox" name="project_ids" value="{html.escape(p.project_id)}"{" checked" if output and p.project_id in output.project_ids else ""} /><span>{html.escape(p.name)} ({html.escape(p.project_id)})</span></label>'
+            f'<label class="person-option-label"><input type="checkbox" name="project_ids" value="{html.escape(p.project_id)}"{" checked" if output and p.project_id in output.project_ids else ""} /><span class="person-option-text">{html.escape(p.name)} ({html.escape(p.project_id)})</span></label>'
             for p in projects
         )
         article_display = 'style="display:block;"' if output and output.output_type == OutputType.ARTICLE else 'style="display:none;"'
         patent_display = 'style="display:block;"' if output and output.output_type == OutputType.PATENT else 'style="display:none;"'
+        software_copyright_display = 'style="display:block;"' if output and output.output_type == OutputType.SOFTWARE_COPYRIGHT else 'style="display:none;"'
         article = output.article if output and output.article else None
         patent = output.patent if output and output.patent else None
+        software_copyright = output.software_copyright if output and output.software_copyright else None
         body = f"""
         <section class="stack">
           <div class="topbar">
@@ -2720,7 +2707,7 @@ class WebApplication:
                 </div>
                 <div class="field span-2">
                   <label>负责人 *</label>
-                  <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
+                  <div class="person-selector">
                     {owner_checkboxes if owner_checkboxes else '<p class="muted">暂无成员。</p>'}
                   </div>
                   <div class="inline-help">可勾选成员，也可在下方手动输入未建档成员或外部合作者。</div>
@@ -2728,14 +2715,14 @@ class WebApplication:
                 </div>
                 <div class="field span-2">
                   <label>参与人</label>
-                  <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
+                  <div class="person-selector">
                     {participant_checkboxes if participant_checkboxes else '<p class="muted">暂无成员。</p>'}
                   </div>
                   <input id="participant_member_ids_manual" name="participant_member_ids_manual" placeholder="手动输入参与人，多个用逗号、分号或换行分隔" style="margin-top:10px;" />
                 </div>
                 <div class="field span-2">
                   <label>关联项目</label>
-                  <div style="border:1px solid var(--line);border-radius:14px;padding:8px;max-height:200px;overflow-y:auto;">
+                  <div class="person-selector">
                     {project_checkboxes if project_checkboxes else '<p class="muted">暂无项目。</p>'}
                   </div>
                 </div>
@@ -2813,6 +2800,32 @@ class WebApplication:
                 </div>
               </div>
 
+              <div id="software-copyright-fields" {software_copyright_display} class="source-card">
+                <h3>软件著作权专属字段</h3>
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="registration_number">登记号</label>
+                    <input id="registration_number" name="registration_number" value="{html.escape(software_copyright.registration_number) if software_copyright else ''}" placeholder="软著登字第XXXXXXX号" />
+                  </div>
+                  <div class="field">
+                    <label for="version_number">版本号</label>
+                    <input id="version_number" name="version_number" value="{html.escape(software_copyright.version_number) if software_copyright else ''}" placeholder="如：V1.0" />
+                  </div>
+                  <div class="field span-2">
+                    <label for="full_software_name">软件全称</label>
+                    <input id="full_software_name" name="full_software_name" value="{html.escape(software_copyright.full_software_name) if software_copyright else ''}" placeholder="软件的完整名称" />
+                  </div>
+                  <div class="field">
+                    <label for="development_completion_date">开发完成日期</label>
+                    <input id="development_completion_date" name="development_completion_date" type="date" value="{html.escape(software_copyright.development_completion_date) if software_copyright else ''}" />
+                  </div>
+                  <div class="field">
+                    <label for="first_publication_date">首次发表日期</label>
+                    <input id="first_publication_date" name="first_publication_date" type="date" value="{html.escape(software_copyright.first_publication_date) if software_copyright else ''}" />
+                  </div>
+                </div>
+              </div>
+
               <div class="button-row">
                 <button class="button secondary" type="submit" formaction="{'/outputs/' + html.escape(output.output_id) + '/save' if is_edit else '/outputs/save'}" formnovalidate>保存草稿</button>
                 <button class="button primary" type="submit">{submit_label or ('提交修改' if is_edit else '提交审核')}</button>
@@ -2823,18 +2836,27 @@ class WebApplication:
               function toggleOutputFields(outputType) {{
                 const articleFields = document.getElementById('article-fields');
                 const patentFields = document.getElementById('patent-fields');
+                const softwareCopyrightFields = document.getElementById('software-copyright-fields');
                 const articleTypeInput = document.getElementById('article_type');
                 if (outputType === 'article') {{
                   articleFields.style.display = 'block';
                   patentFields.style.display = 'none';
+                  softwareCopyrightFields.style.display = 'none';
                   articleTypeInput.required = true;
                 }} else if (outputType === 'patent') {{
                   articleFields.style.display = 'none';
                   patentFields.style.display = 'block';
+                  softwareCopyrightFields.style.display = 'none';
+                  articleTypeInput.required = false;
+                }} else if (outputType === 'software_copyright') {{
+                  articleFields.style.display = 'none';
+                  patentFields.style.display = 'none';
+                  softwareCopyrightFields.style.display = 'block';
                   articleTypeInput.required = false;
                 }} else {{
                   articleFields.style.display = 'none';
                   patentFields.style.display = 'none';
+                  softwareCopyrightFields.style.display = 'none';
                   articleTypeInput.required = false;
                 }}
               }}
@@ -3487,6 +3509,7 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
 
             article = None
             patent = None
+            software_copyright = None
             if output_type == OutputType.ARTICLE:
                 article_type = fields.get("article_type", "").strip()
                 if not article_type and save_mode != "draft":
@@ -3508,6 +3531,14 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                     kind_code=fields.get("patent_kind", "").strip(),
                     status=fields.get("patent_status", "").strip(),
                 )
+            if output_type == OutputType.SOFTWARE_COPYRIGHT:
+                software_copyright = SoftwareCopyrightMetadata(
+                    registration_number=fields.get("registration_number", "").strip(),
+                    full_software_name=fields.get("full_software_name", "").strip(),
+                    version_number=fields.get("version_number", "").strip(),
+                    development_completion_date=fields.get("development_completion_date", "").strip(),
+                    first_publication_date=fields.get("first_publication_date", "").strip(),
+                )
 
             output = ResearchOutput(
                 output_id=output_id,
@@ -3522,6 +3553,7 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 notes=fields.get("notes", "").strip(),
                 article=article,
                 patent=patent,
+                software_copyright=software_copyright,
                 review_status=ReviewStatus.DRAFT,
             )
             self.app.repository.add_output(output, actor_role=user.role, actor_member_id=user.member_id)
@@ -3590,6 +3622,7 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
 
             article = None
             patent = None
+            software_copyright = None
             if output_type == OutputType.ARTICLE:
                 article_type = fields.get("article_type", "").strip()
                 if not article_type:
@@ -3611,6 +3644,14 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                     kind_code=fields.get("patent_kind", "").strip(),
                     status=fields.get("patent_status", "").strip(),
                 )
+            if output_type == OutputType.SOFTWARE_COPYRIGHT:
+                software_copyright = SoftwareCopyrightMetadata(
+                    registration_number=fields.get("registration_number", "").strip(),
+                    full_software_name=fields.get("full_software_name", "").strip(),
+                    version_number=fields.get("version_number", "").strip(),
+                    development_completion_date=fields.get("development_completion_date", "").strip(),
+                    first_publication_date=fields.get("first_publication_date", "").strip(),
+                )
 
             output = ResearchOutput(
                 output_id=output_id.strip(),
@@ -3626,6 +3667,7 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
                 review_status=ReviewStatus.DRAFT if save_mode == "draft" else existing.review_status,
                 article=article,
                 patent=patent,
+                software_copyright=software_copyright,
                 created_at=existing.created_at,
             )
             self.app.repository.update_output(output, actor_role=user.role, actor_member_id=user.member_id)
