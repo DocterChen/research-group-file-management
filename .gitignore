@@ -75,6 +75,15 @@ imports/raw/
 *.ris.tmp
 *.bib.tmp
 
+# 专利和软著相关文档（不提交）
+docs/plans/专利提交/
+docs/plans/*软件著作*.doc
+docs/plans/*软著*.doc
+源代码整理.docx
+设计开发文档*.docx
+软件合作开发协议.docx
+~$*.docx
+
 # 示例：
 # local-config.yml
 # *.backup
