@@ -1,0 +1,55 @@
+<!-- pages/bind/bind.wxml -->
+<view class="bind-container">
+  <view class="bind-header">
+    <view class="header-title">选择加入方式</view>
+    <view class="header-desc">首次登录需要绑定课题组</view>
+  </view>
+
+  <view class="bind-modes">
+    <view class="mode-item {{mode === 'join' ? 'active' : ''}}" bindtap="selectMode" data-mode="join">
+      <view class="mode-icon">🔗</view>
+      <view class="mode-title">加入现有课题组</view>
+      <view class="mode-desc">输入邀请码加入</view>
+    </view>
+
+    <view class="mode-item {{mode === 'create' ? 'active' : ''}}" bindtap="selectMode" data-mode="create">
+      <view class="mode-icon">➕</view>
+      <view class="mode-title">创建新课题组</view>
+      <view class="mode-desc">成为管理员</view>
+    </view>
+  </view>
+
+  <view class="bind-form">
+    <!-- 通用字段：昵称 -->
+    <view class="input-group">
+      <view class="input-label">昵称 *</view>
+      <input class="input-field" placeholder="请输入您的昵称" value="{{displayName}}" bindinput="onDisplayNameInput" />
+    </view>
+
+    <!-- 加入现有课题组 -->
+    <block wx:if="{{mode === 'join'}}">
+      <view class="input-group">
+        <view class="input-label">邀请码 *</view>
+        <input class="input-field" placeholder="请输入6位邀请码" value="{{inviteCode}}" bindinput="onInviteCodeInput" maxlength="6" />
+        <view class="input-hint">请向课题组管理员索取邀请码</view>
+      </view>
+    </block>
+
+    <!-- 创建新课题组 -->
+    <block wx:if="{{mode === 'create'}}">
+      <view class="input-group">
+        <view class="input-label">课题组名称 *</view>
+        <input class="input-field" placeholder="例如：张三课题组" value="{{labName}}" bindinput="onLabNameInput" />
+      </view>
+
+      <view class="input-group">
+        <view class="input-label">课题组副标题</view>
+        <input class="input-field" placeholder="例如：人工智能研究团队" value="{{labSubtitle}}" bindinput="onLabSubtitleInput" />
+      </view>
+    </block>
+
+    <button class="btn-primary btn-submit" bindtap="handleSubmit" loading="{{submitting}}">
+      {{submitting ? '提交中...' : (mode === 'join' ? '加入课题组' : '创建课题组')}}
+    </button>
+  </view>
+</view>

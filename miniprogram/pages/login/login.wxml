@@ -1,0 +1,28 @@
+<!-- pages/login/login.wxml -->
+<view class="login-container">
+  <view class="login-header">
+    <image class="logo" src="/assets/logo.png" mode="aspectFit"></image>
+    <view class="title">科研成果管理</view>
+    <view class="subtitle">Research Output Management</view>
+  </view>
+
+  <view class="login-content">
+    <view class="welcome-text">
+      <text class="welcome-title">欢迎使用</text>
+      <text class="welcome-desc">使用微信账号快速登录</text>
+    </view>
+
+    <button class="btn-wechat-login" bindtap="handleWechatLogin" loading="{{logging}}">
+      <image class="wechat-icon" src="/assets/icons/wechat.png" mode="aspectFit"></image>
+      <text>{{logging ? '登录中...' : '微信登录'}}</text>
+    </button>
+
+    <view class="login-tips">
+      <text class="tip-text">首次登录需要绑定课题组</text>
+    </view>
+  </view>
+
+  <view class="login-footer">
+    <text class="footer-text">科研成果管理平台</text>
+  </view>
+</view>

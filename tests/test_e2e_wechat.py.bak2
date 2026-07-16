@@ -1,0 +1,524 @@
+"""端到端测试 - 完整的微信小程序集成流程"""
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+# 添加源代码路径
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from lab_literature_manager.api_extensions import APIRequestHandler
+from lab_literature_manager.models import (
+    Member,
+    OutputType,
+    ResearchOutput,
+    ReviewStatus,
+    Role,
+)
+from lab_literature_manager.multilab_repository import MultiLabRepository
+from lab_literature_manager.wechat_api import WeChatConfig
+
+
+class TestE2EUserJourney(unittest.TestCase):
+    """测试完整的用户旅程"""
+
+    def setUp(self):
+        """设置测试环境"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.data_dir = Path(self.temp_dir) / "data"
+        self.auth_file = Path(self.temp_dir) / "users.json"
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
+        self.multilab_repo = MultiLabRepository(str(self.data_dir))
+        self.wechat_config = WeChatConfig(
+            miniprogram_appid="test_appid",
+            miniprogram_secret="test_secret",
+        )
+        self.api_handler = APIRequestHandler(
+            self.multilab_repo,
+            self.wechat_config,
+            str(self.auth_file),
+        )
+
+    def tearDown(self):
+        """清理测试数据"""
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_complete_user_journey_create_lab(self):
+        """
+        完整旅程：用户 A 登录 → 创建课题组 → 添加成员 → 创建成果 → 提交审核
+        """
+        # ====================
+        # 步骤 1：用户 A 登录并创建课题组
+        # ====================
+        bind_body_a = {
+            "openid": "openid_userA",
+            "unionid": "unionid_userA",
+            "source": "miniprogram",
+            "create_lab": True,
+            "lab_name": "AI 实验室",
+            "lab_subtitle": "人工智能研究组",
+            "display_name": "张教授",
+        }
+        result_a = self.api_handler.api_wechat_bind_lab(bind_body_a)
+
+        self.assertEqual(result_a.get("status"), "success")
+        session_token_a = result_a["session_token"]
+        lab_id_a = result_a["lab_id"]
+        invite_code = result_a["invite_code"]
+
+        print(f"\n✓ 用户 A 创建课题组成功: {lab_id_a}")
+        print(f"  邀请码: {invite_code}")
+
+        # ====================
+        # 步骤 2：获取课题组的 repository 并添加成员信息
+        # ====================
+        lab_repo_a = self.multilab_repo.get_lab_repo(lab_id_a)
+
+        # 添加用户 A 作为成员
+        member_a = Member(
+            member_id="M001",
+            name="张教授",
+            role=Role.ADMIN,
+            email="zhang@example.com",
+        )
+        lab_repo_a.add_member(member_a)
+
+        print(f"✓ 添加成员: {member_a.name}")
+
+        # ====================
+        # 步骤 3：用户 A 创建研究成果
+        # ====================
+        from lab_literature_manager.models import ArticleMetadata
+
+        article_meta = ArticleMetadata(
+            article_type="期刊论文",
+            journal="Nature",
+            doi="10.1038/nature12345",
+            publication_year=2024,
+        )
+
+        output_a = ResearchOutput(
+            output_id="LW001",
+            output_type=OutputType.ARTICLE,
+            title="Deep Learning Advances in 2024",
+            owner_member_ids=["张教授", "李研究员"],
+            contributors=["M001"],
+            tags=["AI", "Deep Learning"],
+            review_status=ReviewStatus.DRAFT,
+            metadata=article_meta.to_dict(),
+        )
+
+        lab_repo_a.add_output(output_a)
+        print(f"✓ 创建成果: {output_a.title} (ID: {output_a.output_id})")
+
+        # ====================
+        # 步骤 4：提交审核
+        # ====================
+        from dataclasses import replace
+
+        output_submitted = replace(output_a, review_status=ReviewStatus.SUBMITTED)
+        lab_repo_a.update_output(output_submitted)
+
+        print(f"✓ 提交审核: {output_a.output_id}")
+
+        # ====================
+        # 步骤 5：验证数据持久化
+        # ====================
+        # 重新获取 repository
+        lab_repo_reloaded = self.multilab_repo.get_lab_repo(lab_id_a)
+        output_reloaded = lab_repo_reloaded.get_output(output_a.output_id)
+
+        self.assertEqual(output_reloaded.title, output_a.title)
+        self.assertEqual(output_reloaded.review_status, ReviewStatus.SUBMITTED)
+
+        print("✓ 数据持久化验证成功")
+
+    def test_complete_user_journey_join_lab(self):
+        """
+        完整旅程：用户 B 登录 → 加入课题组 → 查看成果列表
+        """
+        # ====================
+        # 准备：用户 A 创建课题组并添加成果
+        # ====================
+        bind_body_a = {
+            "openid": "openid_admin",
+            "unionid": "unionid_admin",
+            "source": "miniprogram",
+            "create_lab": True,
+            "lab_name": "生物实验室",
+            "display_name": "王教授",
+        }
+        result_a = self.api_handler.api_wechat_bind_lab(bind_body_a)
+        lab_id = result_a["lab_id"]
+        invite_code = result_a["invite_code"]
+
+        lab_repo = self.multilab_repo.get_lab_repo(lab_id)
+
+        # 添加管理员成员
+        member_admin = Member(
+            member_id="M001",
+            name="王教授",
+            role=Role.ADMIN,
+        )
+        lab_repo.add_member(member_admin)
+
+        # 添加一个成果
+        from lab_literature_manager.models import ArticleMetadata
+
+        output_1 = ResearchOutput(
+            output_id="LW001",
+            output_type=OutputType.ARTICLE,
+            title="Cancer Research Paper",
+            owner_member_ids=["王教授"],
+            contributors=["M001"],
+            review_status=ReviewStatus.APPROVED,
+            metadata=ArticleMetadata(article_type="期刊论文", journal="Cell").to_dict(),
+        )
+        lab_repo.add_output(output_1)
+
+        # ====================
+        # 步骤 1：用户 B 使用邀请码加入
+        # ====================
+        bind_body_b = {
+            "openid": "openid_userB",
+            "unionid": "unionid_userB",
+            "source": "miniprogram",
+            "invite_code": invite_code,
+            "display_name": "李博士",
+        }
+        result_b = self.api_handler.api_wechat_bind_lab(bind_body_b)
+
+        self.assertEqual(result_b.get("status"), "success")
+        session_token_b = result_b["session_token"]
+
+        print(f"\n✓ 用户 B 加入课题组: {result_b['lab_name']}")
+
+        # ====================
+        # 步骤 2：用户 B 查看课题组成果列表
+        # ====================
+        lab_repo_b = self.multilab_repo.get_lab_repo(lab_id)
+        outputs = lab_repo_b.list_outputs()
+
+        self.assertEqual(len(outputs), 1)
+        self.assertEqual(outputs[0].title, "Cancer Research Paper")
+
+        print(f"✓ 用户 B 查看成果列表: {len(outputs)} 条成果")
+
+        # ====================
+        # 步骤 3：用户 B 添加自己的成果
+        # ====================
+        # 先添加用户 B 为成员
+        member_b = Member(
+            member_id="M002",
+            name="李博士",
+            role=Role.MEMBER,
+        )
+        lab_repo_b.add_member(member_b)
+
+        output_2 = ResearchOutput(
+            output_id="LW002",
+            output_type=OutputType.ARTICLE,
+            title="Immunology Study",
+            owner_member_ids=["李博士"],
+            contributors=["M002"],
+            review_status=ReviewStatus.DRAFT,
+            metadata=ArticleMetadata(article_type="期刊论文").to_dict(),
+        )
+        lab_repo_b.add_output(output_2)
+
+        print(f"✓ 用户 B 添加成果: {output_2.title}")
+
+        # ====================
+        # 步骤 4：验证课题组现在有 2 个成果
+        # ====================
+        outputs_updated = lab_repo_b.list_outputs()
+        self.assertEqual(len(outputs_updated), 2)
+
+        print("✓ 课题组成果总数验证成功")
+
+    def test_cross_lab_data_isolation(self):
+        """
+        完整旅程：验证课题组 A 和课题组 B 的数据完全隔离
+        """
+        # ====================
+        # 步骤 1：创建课题组 A
+        # ====================
+        bind_body_a = {
+            "openid": "openid_labA",
+            "unionid": "unionid_labA",
+            "source": "miniprogram",
+            "create_lab": True,
+            "lab_name": "课题组 A",
+            "display_name": "A 教授",
+        }
+        result_a = self.api_handler.api_wechat_bind_lab(bind_body_a)
+        lab_id_a = result_a["lab_id"]
+        session_token_a = result_a["session_token"]
+
+        lab_repo_a = self.multilab_repo.get_lab_repo(lab_id_a)
+
+        # 添加成员和成果
+        member_a = Member(member_id="MA001", name="A 教授", role=Role.ADMIN)
+        lab_repo_a.add_member(member_a)
+
+        from lab_literature_manager.models import ArticleMetadata
+
+        output_a = ResearchOutput(
+            output_id="LWA001",
+            output_type=OutputType.ARTICLE,
+            title="Paper from Lab A",
+            owner_member_ids=["A 教授"],
+            contributors=["MA001"],
+            review_status=ReviewStatus.APPROVED,
+            metadata=ArticleMetadata(article_type="期刊论文").to_dict(),
+        )
+        lab_repo_a.add_output(output_a)
+
+        print(f"\n✓ 课题组 A 创建成功，添加 1 个成果")
+
+        # ====================
+        # 步骤 2：创建课题组 B
+        # ====================
+        bind_body_b = {
+            "openid": "openid_labB",
+            "unionid": "unionid_labB",
+            "source": "miniprogram",
+            "create_lab": True,
+            "lab_name": "课题组 B",
+            "display_name": "B 教授",
+        }
+        result_b = self.api_handler.api_wechat_bind_lab(bind_body_b)
+        lab_id_b = result_b["lab_id"]
+        session_token_b = result_b["session_token"]
+
+        lab_repo_b = self.multilab_repo.get_lab_repo(lab_id_b)
+
+        # 添加成员和成果
+        member_b = Member(member_id="MB001", name="B 教授", role=Role.ADMIN)
+        lab_repo_b.add_member(member_b)
+
+        output_b = ResearchOutput(
+            output_id="LWB001",
+            output_type=OutputType.ARTICLE,
+            title="Paper from Lab B",
+            owner_member_ids=["B 教授"],
+            contributors=["MB001"],
+            review_status=ReviewStatus.APPROVED,
+            metadata=ArticleMetadata(article_type="期刊论文").to_dict(),
+        )
+        lab_repo_b.add_output(output_b)
+
+        print(f"✓ 课题组 B 创建成功，添加 1 个成果")
+
+        # ====================
+        # 步骤 3：验证数据隔离
+        # ====================
+        # 课题组 A 只能看到自己的成果
+        outputs_a = lab_repo_a.list_outputs()
+        self.assertEqual(len(outputs_a), 1)
+        self.assertEqual(outputs_a[0].output_id, "LWA001")
+
+        # 课题组 B 只能看到自己的成果
+        outputs_b = lab_repo_b.list_outputs()
+        self.assertEqual(len(outputs_b), 1)
+        self.assertEqual(outputs_b[0].output_id, "LWB001")
+
+        print("✓ 数据隔离验证成功")
+
+        # ====================
+        # 步骤 4：验证成员隔离
+        # ====================
+        # 课题组 A 看不到课题组 B 的成员
+        with self.assertRaises(KeyError):
+            lab_repo_a.get_member("MB001")
+
+        # 课题组 B 看不到课题组 A 的成员
+        with self.assertRaises(KeyError):
+            lab_repo_b.get_member("MA001")
+
+        print("✓ 成员隔离验证成功")
+
+        # ====================
+        # 步骤 5：验证会话隔离（用户 A 无法访问课题组 B）
+        # ====================
+        lab_info_cross = self.api_handler.api_lab_info(session_token_a, lab_id_b)
+        self.assertIn("error", lab_info_cross)
+
+        print("✓ 会话隔离验证成功")
+
+    def test_admin_review_workflow(self):
+        """
+        完整旅程：管理员审核成果流程
+        """
+        # ====================
+        # 准备：创建课题组，添加管理员和成员
+        # ====================
+        bind_body_admin = {
+            "openid": "openid_admin",
+            "unionid": "unionid_admin",
+            "source": "miniprogram",
+            "create_lab": True,
+            "lab_name": "审核测试实验室",
+            "display_name": "审核管理员",
+        }
+        result_admin = self.api_handler.api_wechat_bind_lab(bind_body_admin)
+        lab_id = result_admin["lab_id"]
+        invite_code = result_admin["invite_code"]
+
+        lab_repo = self.multilab_repo.get_lab_repo(lab_id)
+
+        # 添加管理员
+        member_admin = Member(
+            member_id="MADMIN",
+            name="审核管理员",
+            role=Role.ADMIN,
+        )
+        lab_repo.add_member(member_admin)
+
+        # 成员加入并添加成果
+        bind_body_member = {
+            "openid": "openid_member",
+            "unionid": "unionid_member",
+            "source": "miniprogram",
+            "invite_code": invite_code,
+            "display_name": "研究员小李",
+        }
+        self.api_handler.api_wechat_bind_lab(bind_body_member)
+
+        member = Member(
+            member_id="M001",
+            name="研究员小李",
+            role=Role.MEMBER,
+        )
+        lab_repo.add_member(member)
+
+        # ====================
+        # 步骤 1：成员提交成果
+        # ====================
+        from lab_literature_manager.models import ArticleMetadata
+
+        output = ResearchOutput(
+            output_id="LW001",
+            output_type=OutputType.ARTICLE,
+            title="待审核论文",
+            owner_member_ids=["研究员小李"],
+            contributors=["M001"],
+            review_status=ReviewStatus.SUBMITTED,
+            metadata=ArticleMetadata(article_type="期刊论文").to_dict(),
+        )
+        lab_repo.add_output(output)
+
+        print(f"\n✓ 成员提交成果: {output.title}")
+
+        # ====================
+        # 步骤 2：管理员审核通过
+        # ====================
+        from dataclasses import replace
+
+        output_approved = replace(output, review_status=ReviewStatus.APPROVED)
+        lab_repo.update_output(output_approved)
+
+        print(f"✓ 管理员审核通过")
+
+        # ====================
+        # 步骤 3：验证审核结果
+        # ====================
+        output_final = lab_repo.get_output("LW001")
+        self.assertEqual(output_final.review_status, ReviewStatus.APPROVED)
+
+        print("✓ 审核流程验证成功")
+
+    def test_multiple_users_collaboration(self):
+        """
+        完整旅程：多用户协作场景
+        """
+        # ====================
+        # 步骤 1：PI 创建课题组
+        # ====================
+        bind_body_pi = {
+            "openid": "openid_pi",
+            "unionid": "unionid_pi",
+            "source": "miniprogram",
+            "create_lab": True,
+            "lab_name": "协作研究组",
+            "display_name": "PI 教授",
+        }
+        result_pi = self.api_handler.api_wechat_bind_lab(bind_body_pi)
+        lab_id = result_pi["lab_id"]
+        invite_code = result_pi["invite_code"]
+
+        lab_repo = self.multilab_repo.get_lab_repo(lab_id)
+
+        # 添加 PI
+        member_pi = Member(member_id="MPI", name="PI 教授", role=Role.PI)
+        lab_repo.add_member(member_pi)
+
+        print(f"\n✓ PI 创建课题组: {result_pi['lab_name']}")
+
+        # ====================
+        # 步骤 2：3 个成员加入
+        # ====================
+        members_data = [
+            ("openid_m1", "unionid_m1", "研究员张三", "M001"),
+            ("openid_m2", "unionid_m2", "研究员李四", "M002"),
+            ("openid_m3", "unionid_m3", "研究员王五", "M003"),
+        ]
+
+        for openid, unionid, name, member_id in members_data:
+            bind_body = {
+                "openid": openid,
+                "unionid": unionid,
+                "source": "miniprogram",
+                "invite_code": invite_code,
+                "display_name": name,
+            }
+            self.api_handler.api_wechat_bind_lab(bind_body)
+
+            member = Member(member_id=member_id, name=name, role=Role.MEMBER)
+            lab_repo.add_member(member)
+
+            print(f"✓ 成员加入: {name}")
+
+        # ====================
+        # 步骤 3：每个成员添加一个成果
+        # ====================
+        from lab_literature_manager.models import ArticleMetadata
+
+        for i, (_, _, name, member_id) in enumerate(members_data, start=1):
+            output = ResearchOutput(
+                output_id=f"LW00{i}",
+                output_type=OutputType.ARTICLE,
+                title=f"Paper by {name}",
+                owner_member_ids=[name],
+                contributors=[member_id],
+                review_status=ReviewStatus.DRAFT,
+                metadata=ArticleMetadata(article_type="期刊论文").to_dict(),
+            )
+            lab_repo.add_output(output)
+
+            print(f"✓ {name} 添加成果: {output.title}")
+
+        # ====================
+        # 步骤 4：验证课题组有 3 个成果
+        # ====================
+        outputs = lab_repo.list_outputs()
+        self.assertEqual(len(outputs), 3)
+
+        print(f"✓ 课题组总成果数: {len(outputs)}")
+
+        # ====================
+        # 步骤 5：验证所有成员信息
+        # ====================
+        members = lab_repo.list_members()
+        self.assertEqual(len(members), 4)  # PI + 3 个成员
+
+        print(f"✓ 课题组总成员数: {len(members)}")
+        print("✓ 多用户协作场景验证成功")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -40,6 +40,10 @@ from .models import (
 )
 from .permissions import can_perform
 from .repository import ResearchRepository
+from .multilab_repository import MultiLabRepository
+from .wechat_api import WeChatConfig
+from .api_extensions import APIRequestHandler
+from .config import load_config
 
 AUTH_SCHEMA_VERSION = 1
 SESSION_COOKIE_NAME = "litman_session"
@@ -86,12 +90,19 @@ class WebUser:
     display_name: str
     role: Role
     member_id: str = ""
+    lab_id: str = ""  # 新增：所属课题组 ID
     created_at: str = ""
     account_status: str = ACCOUNT_STATUS_ACTIVE
     approved_by: str = ""
     approved_at: str = ""
     deletion_requested_at: str = ""
     deletion_approved_by: str = ""
+    # 微信身份字段
+    wechat_unionid: str = ""  # UnionID（跨平台唯一）
+    wechat_miniprogram_openid: str = ""  # 小程序 OpenID
+    wechat_officialaccount_openid: str = ""  # 公众号 OpenID
+    wechat_nickname: str = ""  # 微信昵称（可选）
+    wechat_avatar: str = ""  # 微信头像 URL（可选）
 
     def to_dict(self) -> Dict[str, str]:
         return {
@@ -101,12 +112,18 @@ class WebUser:
             "display_name": self.display_name,
             "role": self.role.value,
             "member_id": self.member_id,
+            "lab_id": self.lab_id,
             "created_at": self.created_at,
             "account_status": self.account_status,
             "approved_by": self.approved_by,
             "approved_at": self.approved_at,
             "deletion_requested_at": self.deletion_requested_at,
             "deletion_approved_by": self.deletion_approved_by,
+            "wechat_unionid": self.wechat_unionid,
+            "wechat_miniprogram_openid": self.wechat_miniprogram_openid,
+            "wechat_officialaccount_openid": self.wechat_officialaccount_openid,
+            "wechat_nickname": self.wechat_nickname,
+            "wechat_avatar": self.wechat_avatar,
         }
 
     @classmethod
@@ -118,12 +135,18 @@ class WebUser:
             display_name=str(data.get("display_name", "")),
             role=Role(str(data.get("role", Role.MEMBER.value))),
             member_id=str(data.get("member_id", "")),
+            lab_id=str(data.get("lab_id", "")),
             created_at=str(data.get("created_at", "")),
             account_status=str(data.get("account_status", ACCOUNT_STATUS_ACTIVE)),
             approved_by=str(data.get("approved_by", "")),
             approved_at=str(data.get("approved_at", "")),
             deletion_requested_at=str(data.get("deletion_requested_at", "")),
             deletion_approved_by=str(data.get("deletion_approved_by", "")),
+            wechat_unionid=str(data.get("wechat_unionid", "")),
+            wechat_miniprogram_openid=str(data.get("wechat_miniprogram_openid", "")),
+            wechat_officialaccount_openid=str(data.get("wechat_officialaccount_openid", "")),
+            wechat_nickname=str(data.get("wechat_nickname", "")),
+            wechat_avatar=str(data.get("wechat_avatar", "")),
         )
 
 
@@ -473,6 +496,27 @@ class WebApplication:
         self.sessions = SessionStore()
         self.login_captchas = LoginCaptchaStore()
         self.settings_path = Path(data_dir) / WORKSPACE_SETTINGS_FILE
+
+        # 初始化多课题组支持和微信 API
+        try:
+            config = load_config()
+            self.multilab_repo = MultiLabRepository(str(data_dir))
+            self.wechat_config = WeChatConfig(
+                miniprogram_appid=config.wechat_miniprogram_appid,
+                miniprogram_secret=config.wechat_miniprogram_secret,
+                officialaccount_appid=config.wechat_officialaccount_appid,
+                officialaccount_secret=config.wechat_officialaccount_secret,
+            )
+            self.api_handler = APIRequestHandler(
+                self.multilab_repo,
+                self.wechat_config,
+                str(auth_path),
+            )
+        except Exception:
+            # 如果配置加载失败，使用空配置（向后兼容）
+            self.multilab_repo = None
+            self.wechat_config = None
+            self.api_handler = None
 
     def load_settings(self) -> WorkspaceSettings:
         if not self.settings_path.exists():
@@ -2875,10 +2919,23 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
     def app(self) -> WebApplication:
         return self.server.app  # type: ignore[attr-defined]
 
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        """处理 CORS 预检请求"""
+        if self.path.startswith("/api/"):
+            self._send_cors_response()
+            return
+        self.send_error(404, "Not Found")
+
     def do_GET(self) -> None:  # noqa: N802
         parsed_url = urlparse(self.path)
         path = parsed_url.path
         query_params = parse_qs(parsed_url.query)
+
+        # API 路由处理
+        if path.startswith("/api/v1/"):
+            self._handle_api_get(path, query_params)
+            return
+
         user = self.app.get_current_user(self)
 
         if path == "/":
@@ -3053,6 +3110,12 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+
+        # API 路由处理
+        if path.startswith("/api/v1/"):
+            self._handle_api_post(path)
+            return
+
         length = int(self.headers.get("Content-Length", "0") or "0")
         content_type = self.headers.get("Content-Type", "")
         is_multipart = "multipart/form-data" in content_type
@@ -3839,6 +3902,271 @@ class LocalWebRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_json_response(self, data: Dict[str, object], *, status: int = 200) -> None:
+        """发送 JSON 响应并设置 CORS 头"""
+        body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self._add_cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_cors_response(self) -> None:
+        """发送 CORS 预检响应"""
+        self.send_response(204)
+        self._add_cors_headers()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _add_cors_headers(self) -> None:
+        """添加 CORS 响应头"""
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-Token")
+        self.send_header("Access-Control-Max-Age", "86400")
+
+    def _parse_json_body(self) -> Dict[str, object]:
+        """解析 JSON 请求体"""
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length == 0:
+            return {}
+        raw = self.rfile.read(length).decode("utf-8")
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+
+    def _get_session_token_from_header(self) -> str:
+        """从请求头获取 session token"""
+        return self.headers.get("X-Session-Token", "").strip()
+
+    def _handle_api_get(self, path: str, query_params: Dict[str, List[str]]) -> None:
+        """处理 API GET 请求"""
+        if self.app.api_handler is None:
+            self._send_json_response({"error": "API not configured"}, status=500)
+            return
+
+        # GET /api/v1/labs
+        if path == "/api/v1/labs":
+            session_token = self._get_session_token_from_header()
+            result = self.app.api_handler.api_labs_list(session_token)
+            status = 200 if "error" not in result else 401
+            self._send_json_response(result, status=status)
+            return
+
+        # GET /api/v1/labs/:lab_id
+        if path.startswith("/api/v1/labs/") and not path.endswith("/regenerate_invite_code"):
+            lab_id = path[len("/api/v1/labs/"):].strip("/")
+            session_token = self._get_session_token_from_header()
+            result = self.app.api_handler.api_lab_info(session_token, lab_id)
+            status = 200 if "error" not in result else 401
+            self._send_json_response(result, status=status)
+            return
+
+        # GET /api/v1/outputs
+        if path == "/api/v1/outputs":
+            session_token = self._get_session_token_from_header()
+            result = self._api_outputs_list(session_token, query_params)
+            status = 200 if "error" not in result else 401
+            self._send_json_response(result, status=status)
+            return
+
+        # GET /api/v1/outputs/:output_id
+        if path.startswith("/api/v1/outputs/"):
+            output_id = path[len("/api/v1/outputs/"):].strip("/")
+            session_token = self._get_session_token_from_header()
+            result = self._api_output_detail(session_token, output_id)
+            status = 200 if "error" not in result else 401
+            self._send_json_response(result, status=status)
+            return
+
+        self._send_json_response({"error": "Not Found"}, status=404)
+
+    def _handle_api_post(self, path: str) -> None:
+        """处理 API POST 请求"""
+        if self.app.api_handler is None:
+            self._send_json_response({"error": "API not configured"}, status=500)
+            return
+
+        body = self._parse_json_body()
+
+        # POST /api/v1/wechat/miniprogram/login
+        if path == "/api/v1/wechat/miniprogram/login":
+            result = self.app.api_handler.api_wechat_miniprogram_login(body)
+            status = 200 if "error" not in result else 400
+            self._send_json_response(result, status=status)
+            return
+
+        # POST /api/v1/wechat/bind
+        if path == "/api/v1/wechat/bind":
+            result = self.app.api_handler.api_wechat_bind_lab(body)
+            status = 200 if "error" not in result else 400
+            self._send_json_response(result, status=status)
+            return
+
+        # POST /api/v1/labs/:lab_id/regenerate_invite_code
+        if path.startswith("/api/v1/labs/") and path.endswith("/regenerate_invite_code"):
+            lab_id = path[len("/api/v1/labs/"):-len("/regenerate_invite_code")].strip("/")
+            session_token = self._get_session_token_from_header()
+            result = self.app.api_handler.api_lab_regenerate_invite_code(session_token, lab_id)
+            status = 200 if "error" not in result else 403
+            self._send_json_response(result, status=status)
+            return
+
+        self._send_json_response({"error": "Not Found"}, status=404)
+
+    def _api_outputs_list(self, session_token: str, query_params: Dict[str, List[str]]) -> Dict[str, object]:
+        """API: 获取成果列表（小程序）"""
+        user, error = self.app.api_handler._verify_session_and_lab(session_token)
+        if error:
+            return {"error": error}
+
+        # 获取查询参数
+        page = int(query_params.get("page", ["1"])[0])
+        page_size = int(query_params.get("page_size", ["20"])[0])
+        search = query_params.get("search", [""])[0]
+        output_type = query_params.get("type", [""])[0]
+        status = query_params.get("status", [""])[0]
+
+        # 获取用户所属课题组的 repository
+        lab_repo = self.app.multilab_repo.get_lab_repo(user.lab_id)
+        if lab_repo is None:
+            return {"error": "Lab not found"}
+
+        # 获取成果列表
+        all_outputs = lab_repo.list_outputs_for_actor(user.role, user.member_id)
+
+        # 搜索过滤
+        if search:
+            search_lower = search.lower()
+            all_outputs = [o for o in all_outputs if search_lower in o.title.lower() or search_lower in o.output_id.lower()]
+
+        # 类型过滤
+        if output_type:
+            try:
+                filter_type = OutputType(output_type)
+                all_outputs = [o for o in all_outputs if o.output_type == filter_type]
+            except ValueError:
+                pass
+
+        # 状态过滤
+        if status:
+            try:
+                filter_status = ReviewStatus(status)
+                all_outputs = [o for o in all_outputs if o.review_status == filter_status]
+            except ValueError:
+                pass
+
+        # 分页
+        total = len(all_outputs)
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+        page = max(1, min(page, total_pages))
+        start = (page - 1) * page_size
+        end = start + page_size
+        outputs = all_outputs[start:end]
+
+        return {
+            "outputs": [
+                {
+                    "output_id": o.output_id,
+                    "title": o.title,
+                    "output_type": o.output_type.value,
+                    "output_type_label": output_type_label(o.output_type),
+                    "review_status": o.review_status.value,
+                    "review_status_label": review_status_label(o.review_status),
+                    "year": o.year,
+                    "summary": o.summary,
+                }
+                for o in outputs
+            ],
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": total_pages,
+            }
+        }
+
+    def _api_output_detail(self, session_token: str, output_id: str) -> Dict[str, object]:
+        """API: 获取成果详情（小程序）"""
+        user, error = self.app.api_handler._verify_session_and_lab(session_token)
+        if error:
+            return {"error": error}
+
+        # 获取用户所属课题组的 repository
+        lab_repo = self.app.multilab_repo.get_lab_repo(user.lab_id)
+        if lab_repo is None:
+            return {"error": "Lab not found"}
+
+        try:
+            output = lab_repo.get_output(output_id)
+        except KeyError:
+            return {"error": "Output not found"}
+
+        # 权限检查
+        if not can_perform(user.role, Permission.VIEW, output=output, actor_member_id=user.member_id):
+            return {"error": "Permission denied"}
+
+        # 构建详细信息
+        result: Dict[str, object] = {
+            "output_id": output.output_id,
+            "title": output.title,
+            "output_type": output.output_type.value,
+            "output_type_label": output_type_label(output.output_type),
+            "review_status": output.review_status.value,
+            "review_status_label": review_status_label(output.review_status),
+            "year": output.year,
+            "summary": output.summary,
+            "notes": output.notes,
+            "keywords": output.keywords,
+            "owner_member_ids": output.owner_member_ids,
+            "participant_member_ids": output.participant_member_ids,
+            "project_ids": output.project_ids,
+            "created_at": output.created_at,
+            "updated_at": output.updated_at,
+        }
+
+        # 添加类型特定元数据
+        if output.article:
+            result["article"] = {
+                "article_type": output.article.article_type,
+                "journal": output.article.journal,
+                "doi": output.article.doi,
+                "pmid": output.article.pmid,
+                "issn": output.article.issn,
+                "publication_year": output.article.publication_year,
+                "submission_status": output.article.submission_status,
+                "first_authors": output.article.first_authors,
+            }
+
+        if output.patent:
+            result["patent"] = {
+                "patent_number": output.patent.patent_number,
+                "application_number": output.patent.application_number,
+                "title": output.patent.title,
+                "country_code": output.patent.country_code,
+                "kind_code": output.patent.kind_code,
+                "inventors": output.patent.inventors,
+                "assignees": output.patent.assignees,
+                "application_date": output.patent.application_date,
+                "publication_date": output.patent.publication_date,
+                "status": output.patent.status,
+                "abstract": output.patent.abstract,
+                "url": output.patent.url,
+            }
+
+        if output.software_copyright:
+            result["software_copyright"] = {
+                "registration_number": output.software_copyright.registration_number,
+                "full_software_name": output.software_copyright.full_software_name,
+                "version_number": output.software_copyright.version_number,
+                "development_completion_date": output.software_copyright.development_completion_date,
+                "first_publication_date": output.software_copyright.first_publication_date,
+            }
+
+        return result
 
     def _handle_excel_export(self, user: WebUser) -> None:
         """处理Excel导出请求。"""

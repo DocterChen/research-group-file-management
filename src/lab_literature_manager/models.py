@@ -632,3 +632,51 @@ class AuditLog:
             summary=str(data.get("summary", "")),
             created_at=str(data.get("created_at", utc_now_iso())),
         )
+
+
+@dataclass(frozen=True)
+class Lab:
+    """Lab (research group) entity for multi-lab support."""
+
+    lab_id: str
+    lab_name: str
+    lab_subtitle: str = ""
+    created_at: str = field(default_factory=utc_now_iso)
+    admin_usernames: List[str] = field(default_factory=list)
+    invite_code: str = ""
+    settings: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not _clean_text(self.lab_id):
+            raise ValueError("Lab ID must not be empty.")
+        if not _clean_text(self.lab_name):
+            raise ValueError("Lab name must not be empty.")
+        object.__setattr__(self, "lab_id", _clean_text(self.lab_id))
+        object.__setattr__(self, "lab_name", _clean_text(self.lab_name))
+        object.__setattr__(self, "lab_subtitle", _clean_text(self.lab_subtitle))
+        object.__setattr__(self, "created_at", _clean_text(self.created_at) or utc_now_iso())
+        object.__setattr__(self, "admin_usernames", _unique_cleaned(self.admin_usernames))
+        object.__setattr__(self, "invite_code", _clean_text(self.invite_code))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "lab_id": self.lab_id,
+            "lab_name": self.lab_name,
+            "lab_subtitle": self.lab_subtitle,
+            "created_at": self.created_at,
+            "admin_usernames": list(self.admin_usernames),
+            "invite_code": self.invite_code,
+            "settings": dict(self.settings),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Lab":
+        return cls(
+            lab_id=str(data.get("lab_id", "")),
+            lab_name=str(data.get("lab_name", "")),
+            lab_subtitle=str(data.get("lab_subtitle", "")),
+            created_at=str(data.get("created_at", utc_now_iso())),
+            admin_usernames=list(data.get("admin_usernames", [])),
+            invite_code=str(data.get("invite_code", "")),
+            settings=dict(data.get("settings", {})),
+        )

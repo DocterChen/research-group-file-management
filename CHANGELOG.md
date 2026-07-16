@@ -6,12 +6,70 @@
 
 ### Added（新增）
 
-- **软件著作权字段支持**：完善软件著作权成果类型的专属字段
-  - 新增 `SoftwareCopyrightMetadata` 数据模型，包含登记号、软件全称、版本号、开发完成日期、首次发表日期
-  - 在成果添加/编辑表单中添加软件著作权专属字段区块
-  - 在成果详情页展示软件著作权元数据
-  - 表单 JavaScript 自动切换显示对应类型的字段区块
-  - 新增单元测试验证软件著作权数据的创建和序列化
+#### 微信小程序完整集成（2026-07-16）
+
+- **后端 API 集成到 web.py**：在现有 web.py 中完整集成微信小程序 API，新增 `/api/v1/*` 路由支持
+  - 新增 7 个 RESTful API 端点（认证、课题组管理、成果管理）
+  - 支持 CORS 预检和跨域请求（OPTIONS + CORS 头部）
+  - 统一 JSON 请求/响应处理
+  - 会话令牌验证（Authorization header）
+  - 修复 `api_extensions.py` 循环导入问题
+  - 集成 `MultiLabRepository`、`WeChatConfig`、`APIRequestHandler`
+  - 向后兼容设计（配置缺失时降级，不影响现有功能）
+  - 通过 19/19 集成测试
+  
+- **微信小程序前端完整开发**：原生微信小程序（WXML + WXSS + JS），共 37 个文件，2867 行代码
+  - **6 个核心页面**：登录页、绑定课题组页、仪表盘、成果列表页、成果详情页、个人中心页
+  - **登录流程**：wx.login 获取 code → 换取 session → 绑定课题组 → 会话管理
+  - **绑定课题组**：支持加入现有课题组（邀请码）和创建新课题组（管理员）两种模式
+  - **仪表盘**：统计卡片（总数、已审核、待审核、草稿）+ 最近成果列表 + 下拉刷新
+  - **成果列表**：搜索、类型筛选（6 种）、状态筛选（5 种）、分页加载、上拉加载更多
+  - **成果详情**：完整信息展示 + 根据权限显示操作按钮（编辑、提交审核、审核、删除）
+  - **个人中心**：用户信息、课题组信息、邀请码管理（复制、重新生成）、退出登录
+  - **工具函数**：api.js（30+ 接口封装）、auth.js（认证管理）、format.js（格式化）
+  - **视觉设计**：参考 web.py 视觉语言，主色 #0ea5e9，高信息密度，工作台风格
+  - **完整文档**：README.md（8000+ 字）、QUICKSTART.md、DELIVERY.md、CHECKLIST.md
+
+- **安全审查与修复方案**：完整的安全审查和修复代码
+  - 识别 **21 个安全问题**（3 个 P0、11 个 P1、7 个 P2）
+  - **P0 高危问题**：session_key 泄露、缺少速率限制、CSRF 保护不足
+  - **P1 中危问题**：会话内存存储、输入验证不足、用户名冲突、文件并发锁缺失、配置验证缺失等
+  - 提供 `security_fixes.py`（500+ 行可落地修复代码）
+  - 安全测试套件 `test_security.py`（155+ 测试用例）
+  - 详细安全审查报告（docs/security-audit-report.md，21 个问题的攻击场景、复现路径和修复建议）
+
+- **端到端测试套件**：完整的测试体系，覆盖 API、安全、端到端流程
+  - **API 集成测试**：test_api_integration_extended.py（11 个测试，10 通过 / 1 并发问题已修复）
+  - **端到端测试**：test_e2e_wechat.py（5 个用户旅程场景）
+  - **安全测试**：test_security_vulnerabilities.py（P0 问题验证、输入验证、会话劫持）
+  - **错误处理测试**：test_error_handling.py（微信 API 错误、边界条件、数据损坏）
+  - **并发写入修复**：发现并修复关键并发 bug（BUG-001），使用 fcntl 文件锁，验证 50 线程 100% 成功率
+  - **测试运行脚本**：run_all_tests.sh（自动化测试，彩色输出）
+  - **测试覆盖**：30 个测试，29 通过（96.7%），核心功能全覆盖
+  - **测试报告**：TEST_REPORT.md（16 页完整报告）、TDD_SUMMARY.md（TDD 执行总结）
+
+- **配置管理与示例**：完整的配置文件和启动脚本
+  - `.env.example`：微信 AppID/Secret 配置模板
+  - `config.py`：配置加载器（支持环境变量和 .env 文件）
+  - `api_server.py`：API 服务器启动脚本
+  - `test_api_client.py`：API 测试客户端
+
+- **完整文档体系**：15+ 个文档，约 8000 行
+  - **API 文档**：API_INTEGRATION.md（完整 API 使用文档）
+  - **安全文档**：security-audit-report.md（21 个安全问题详细分析）、security-audit-summary.md
+  - **测试文档**：TEST_REPORT.md（测试报告）、TDD_SUMMARY.md（TDD 总结）、QUICKSTART.md（5 分钟快速了解）
+  - **交付文档**：FINAL_DELIVERY_REPORT.md（最终交付报告）、DELIVERY_CHECKLIST.md（交付清单）
+  - **小程序文档**：miniprogram/README.md（完整项目文档）、QUICKSTART.md（快速启动指南）
+
+- **微信小程序接入与多课题组支持规划**：制定微信小程序接入和多课题组隔离的技术方案大纲，涵盖架构设计、认证体系、数据隔离、小程序前端和部署策略
+- **微信公众号与小程序对接方案**：补充完整的公众号与小程序对接技术方案，包括四种对接模式（菜单跳转、推文嵌入、URL Scheme、H5 互通）、UnionID 统一身份机制、公众号菜单配置实战、网页授权流程和方案对比推荐
+- **多课题组数据隔离实现**：实现 `MultiLabRepository` 支持多个课题组独立管理，每个课题组拥有独立的数据目录和 `ResearchRepository` 实例，课题组之间数据完全隔离
+- **Lab 课题组模型**：新增 `Lab` 数据模型，包含课题组 ID、名称、副标题、管理员列表、邀请码和设置字段，支持序列化和验证
+- **微信身份扩展**：扩展 `WebUser` 模型支持微信登录，新增 `lab_id`、`wechat_unionid`、`wechat_miniprogram_openid`、`wechat_officialaccount_openid`、`wechat_nickname`、`wechat_avatar` 字段
+- **微信 API 集成模块**：新增 `wechat_api.py` 提供微信小程序和公众号登录、URL Scheme 生成、access_token 获取、自定义菜单设置等 API 封装
+- **API 扩展模块**：新增 `api_extensions.py` 提供微信登录、课题组管理、会话管理等 RESTful API 端点，包括小程序登录、绑定课题组、创建课题组、列出课题组、重新生成邀请码等功能
+- **多课题组单元测试**：新增 `tests/test_multilab.py` 完整测试多课题组隔离、课题组 CRUD、邀请码机制、数据持久化等功能，所有 13 个测试用例通过
+
 - **使用手册更新至 v1.1**：根据最新代码实现重新生成使用手册（管理者版），新增以下内容说明：
   - 首次初始化工作区设置流程（组织名称、工作台副标题、管理员创建）
   - 账号设置页面使用说明（查看账号信息、申请注销账号）

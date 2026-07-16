@@ -1,0 +1,79 @@
+/* pages/bind/bind.wxss */
+.bind-container {
+  min-height: 100vh;
+  padding: 32rpx;
+  background-color: #f8f9fa;
+}
+
+.bind-header {
+  text-align: center;
+  margin-bottom: 48rpx;
+}
+
+.header-title {
+  font-size: 40rpx;
+  font-weight: bold;
+  color: #111827;
+  margin-bottom: 16rpx;
+}
+
+.header-desc {
+  font-size: 28rpx;
+  color: #6b7280;
+}
+
+.bind-modes {
+  display: flex;
+  gap: 24rpx;
+  margin-bottom: 48rpx;
+}
+
+.mode-item {
+  flex: 1;
+  background: #ffffff;
+  border: 4rpx solid #e5e7eb;
+  border-radius: 24rpx;
+  padding: 32rpx 24rpx;
+  text-align: center;
+  transition: all 0.3s;
+}
+
+.mode-item.active {
+  border-color: #0ea5e9;
+  background: #eff6ff;
+}
+
+.mode-icon {
+  font-size: 64rpx;
+  margin-bottom: 16rpx;
+}
+
+.mode-title {
+  font-size: 30rpx;
+  font-weight: bold;
+  color: #111827;
+  margin-bottom: 8rpx;
+}
+
+.mode-desc {
+  font-size: 24rpx;
+  color: #6b7280;
+}
+
+.bind-form {
+  background: #ffffff;
+  border-radius: 24rpx;
+  padding: 32rpx;
+  box-shadow: 0 4rpx 16rpx rgba(0, 0, 0, 0.06);
+}
+
+.input-hint {
+  font-size: 24rpx;
+  color: #9ca3af;
+  margin-top: 8rpx;
+}
+
+.btn-submit {
+  margin-top: 48rpx;
+  width: 100%;
+}

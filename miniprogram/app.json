@@ -1,0 +1,52 @@
+{
+  "pages": [
+    "pages/login/login",
+    "pages/bind/bind",
+    "pages/dashboard/dashboard",
+    "pages/outputs/outputs",
+    "pages/output-detail/output-detail",
+    "pages/profile/profile"
+  ],
+  "window": {
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#0ea5e9",
+    "navigationBarTitleText": "科研成果管理",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f8f9fa"
+  },
+  "tabBar": {
+    "color": "#666666",
+    "selectedColor": "#0ea5e9",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/dashboard/dashboard",
+        "text": "仪表盘",
+        "iconPath": "assets/icons/dashboard.png",
+        "selectedIconPath": "assets/icons/dashboard-active.png"
+      },
+      {
+        "pagePath": "pages/outputs/outputs",
+        "text": "成果管理",
+        "iconPath": "assets/icons/outputs.png",
+        "selectedIconPath": "assets/icons/outputs-active.png"
+      },
+      {
+        "pagePath": "pages/profile/profile",
+        "text": "我的",
+        "iconPath": "assets/icons/profile.png",
+        "selectedIconPath": "assets/icons/profile-active.png"
+      }
+    ]
+  },
+  "usingComponents": {},
+  "networkTimeout": {
+    "request": 30000
+  },
+  "permission": {
+    "scope.userLocation": {
+      "desc": "用于提供更好的服务体验"
+    }
+  }
+}

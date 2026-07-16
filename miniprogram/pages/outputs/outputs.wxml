@@ -1,0 +1,87 @@
+<!-- pages/outputs/outputs.wxml -->
+<view class="outputs-container">
+  <!-- 搜索和筛选 -->
+  <view class="search-section">
+    <view class="search-bar">
+      <input
+        class="search-input"
+        placeholder="搜索成果标题、作者..."
+        value="{{searchKeyword}}"
+        bindinput="onSearchInput"
+        bindconfirm="handleSearch"
+      />
+      <view class="search-btn" bindtap="handleSearch">搜索</view>
+    </view>
+
+    <view class="filter-bar">
+      <picker mode="selector" range="{{typeOptions}}" range-key="label" value="{{typeIndex}}" bindchange="onTypeChange">
+        <view class="filter-item">
+          <text>{{typeOptions[typeIndex].label}}</text>
+          <text class="arrow">▼</text>
+        </view>
+      </picker>
+
+      <picker mode="selector" range="{{statusOptions}}" range-key="label" value="{{statusIndex}}" bindchange="onStatusChange">
+        <view class="filter-item">
+          <text>{{statusOptions[statusIndex].label}}</text>
+          <text class="arrow">▼</text>
+        </view>
+      </picker>
+    </view>
+  </view>
+
+  <!-- 成果列表 -->
+  <view class="outputs-list">
+    <view wx:if="{{loading && outputs.length === 0}}" class="loading-container">
+      <text>加载中...</text>
+    </view>
+
+    <view wx:elif="{{outputs.length === 0}}" class="empty-state">
+      <view class="empty-icon">📄</view>
+      <view class="empty-text">暂无成果记录</view>
+    </view>
+
+    <view wx:else>
+      <view
+        wx:for="{{outputs}}"
+        wx:key="output_id"
+        class="output-card"
+        bindtap="goToDetail"
+        data-id="{{item.output_id}}"
+      >
+        <view class="card-header">
+          <view class="card-title">{{item.title}}</view>
+          <view class="tag {{getStatusClass(item.review_status)}}">
+            {{formatReviewStatus(item.review_status)}}
+          </view>
+        </view>
+
+        <view class="card-meta">
+          <view class="meta-row">
+            <text class="meta-label">类型：</text>
+            <text>{{formatOutputType(item.output_type)}}</text>
+          </view>
+          <view class="meta-row">
+            <text class="meta-label">时间：</text>
+            <text>{{formatDateTime(item.created_at)}}</text>
+          </view>
+        </view>
+
+        <view wx:if="{{item.authors && item.authors.length > 0}}" class="card-authors">
+          <text class="meta-label">作者：</text>
+          <text>{{formatAuthors(item.authors)}}</text>
+        </view>
+      </view>
+
+      <!-- 加载更多 -->
+      <view wx:if="{{hasMore}}" class="load-more" bindtap="loadMore">
+        <text wx:if="{{loadingMore}}">加载中...</text>
+        <text wx:else>加载更多</text>
+      </view>
+
+      <view wx:else class="load-end">
+        <text>没有更多了</text>
+      </view>
+    </view>
+  </view>
+</view>

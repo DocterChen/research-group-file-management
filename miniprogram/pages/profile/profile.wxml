@@ -1,0 +1,71 @@
+<!-- pages/profile/profile.wxml -->
+<view class="profile-container">
+  <!-- 用户信息卡片 -->
+  <view class="user-card">
+    <view class="user-avatar">
+      <image src="/assets/icons/avatar.png" mode="aspectFill"></image>
+    </view>
+    <view class="user-info">
+      <view class="user-name">{{userInfo.displayName}}</view>
+      <view class="user-role">{{formatRole(userInfo.role)}}</view>
+    </view>
+  </view>
+
+  <!-- 课题组信息 -->
+  <view class="section">
+    <view class="section-title">课题组信息</view>
+    <view class="info-card">
+      <view class="info-row">
+        <view class="info-label">课题组名称</view>
+        <view class="info-value">{{labInfo.labName}}</view>
+      </view>
+      <view wx:if="{{isAdmin}}" class="info-row">
+        <view class="info-label">邀请码</view>
+        <view class="info-value">
+          <text>{{inviteCode || '加载中...'}}</text>
+          <text class="link-text" bindtap="handleCopyInviteCode">复制</text>
+        </view>
+      </view>
+      <view wx:if="{{isAdmin}}" class="info-row">
+        <view class="info-label">重新生成邀请码</view>
+        <view class="info-value">
+          <text class="link-text" bindtap="handleRegenerateInviteCode">生成新邀请码</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 功能菜单 -->
+  <view class="section">
+    <view class="section-title">功能</view>
+    <view class="menu-list">
+      <view class="menu-item" bindtap="goToOutputs">
+        <view class="menu-icon">📊</view>
+        <view class="menu-text">我的成果</view>
+        <view class="menu-arrow">→</view>
+      </view>
+      <view wx:if="{{isAdmin}}" class="menu-item" bindtap="goToDashboard">
+        <view class="menu-icon">📈</view>
+        <view class="menu-text">统计仪表盘</view>
+        <view class="menu-arrow">→</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 关于 -->
+  <view class="section">
+    <view class="section-title">关于</view>
+    <view class="menu-list">
+      <view class="menu-item">
+        <view class="menu-icon">ℹ️</view>
+        <view class="menu-text">版本号</view>
+        <view class="menu-value">1.0.0</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 退出登录 -->
+  <view class="logout-section">
+    <button class="btn-logout" bindtap="handleLogout">退出登录</button>
+  </view>
+</view>

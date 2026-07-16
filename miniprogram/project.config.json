@@ -1,0 +1,64 @@
+{
+  "description": "科研成果管理小程序",
+  "projectname": "research-output-miniprogram",
+  "miniprogramRoot": "./",
+  "compileType": "miniprogram",
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "coverView": true,
+    "lazyloadPlaceholderEnable": false,
+    "preloadBackgroundData": false,
+    "autoAudits": false,
+    "uglifyFileName": false,
+    "uploadWithSourceMap": true,
+    "useIsolateContext": true,
+    "useCompilerModule": true,
+    "userConfirmedUseCompilerModuleSwitch": false,
+    "nodeModules": false,
+    "showShadowRootInWxmlPanel": true,
+    "scopeDataCheck": false,
+    "checkInvalidKey": true,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    },
+    "useStaticServer": true,
+    "packNpmManually": false,
+    "packNpmRelationList": []
+  },
+  "condition": {
+    "miniprogram": {
+      "list": [
+        {
+          "name": "登录页",
+          "pathName": "pages/login/login",
+          "query": "",
+          "launchMode": "default"
+        },
+        {
+          "name": "仪表盘",
+          "pathName": "pages/dashboard/dashboard",
+          "query": "",
+          "launchMode": "default"
+        },
+        {
+          "name": "成果列表",
+          "pathName": "pages/outputs/outputs",
+          "query": "",
+          "launchMode": "default"
+        },
+        {
+          "name": "成果详情",
+          "pathName": "pages/output-detail/output-detail",
+          "query": "id=LW20260715001",
+          "launchMode": "default"
+        }
+      ]
+    }
+  }
+}

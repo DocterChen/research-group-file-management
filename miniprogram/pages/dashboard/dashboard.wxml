@@ -1,0 +1,85 @@
+<!-- pages/dashboard/dashboard.wxml -->
+<view class="dashboard-container">
+  <!-- 头部信息 -->
+  <view class="dashboard-header">
+    <view class="lab-info">
+      <view class="lab-name">{{labInfo.labName || '课题组'}}</view>
+      <view class="user-role">{{userInfo.displayName}} · {{userInfo.role === 'admin' ? '管理员' : (userInfo.role === 'pi' ? 'PI' : '成员')}}</view>
+    </view>
+  </view>
+
+  <!-- 统计卡片 -->
+  <view class="stats-section">
+    <view class="stats-grid">
+      <view class="stat-card" bindtap="goToOutputs">
+        <view class="stat-value">{{stats.total}}</view>
+        <view class="stat-label">总成果数</view>
+      </view>
+
+      <view class="stat-card" bindtap="goToOutputs">
+        <view class="stat-value text-success">{{stats.approved}}</view>
+        <view class="stat-label">已审核</view>
+      </view>
+
+      <view class="stat-card" bindtap="goToOutputs">
+        <view class="stat-value text-warning">{{stats.submitted}}</view>
+        <view class="stat-label">待审核</view>
+      </view>
+
+      <view class="stat-card" bindtap="goToOutputs">
+        <view class="stat-value text-muted">{{stats.draft}}</view>
+        <view class="stat-label">草稿</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 最近成果 -->
+  <view class="recent-section">
+    <view class="section-header">
+      <view class="section-title">最近成果</view>
+      <view class="section-more" bindtap="goToOutputs">查看全部 →</view>
+    </view>
+
+    <view wx:if="{{loading}}" class="loading-container">
+      <text>加载中...</text>
+    </view>
+
+    <view wx:elif="{{recentOutputs.length === 0}}" class="empty-state">
+      <view class="empty-icon">📄</view>
+      <view class="empty-text">暂无成果记录</view>
+    </view>
+
+    <view wx:else class="outputs-list">
+      <view
+        wx:for="{{recentOutputs}}"
+        wx:key="output_id"
+        class="output-item"
+        bindtap="goToOutputDetail"
+        data-id="{{item.output_id}}"
+      >
+        <view class="output-header">
+          <view class="output-title">{{item.title}}</view>
+          <view class="tag {{getStatusClass(item.review_status)}}">
+            {{formatReviewStatus(item.review_status)}}
+          </view>
+        </view>
+
+        <view class="output-meta">
+          <view class="meta-item">
+            <text class="meta-label">类型：</text>
+            <text>{{formatOutputType(item.output_type)}}</text>
+          </view>
+          <view class="meta-item">
+            <text class="meta-label">时间：</text>
+            <text>{{formatDateTime(item.created_at)}}</text>
+          </view>
+        </view>
+
+        <view wx:if="{{item.authors && item.authors.length > 0}}" class="output-authors">
+          <text class="meta-label">作者：</text>
+          <text>{{item.authors.join(', ')}}</text>
+        </view>
+      </view>
+    </view>
+  </view>
+</view>

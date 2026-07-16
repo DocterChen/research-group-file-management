@@ -1,0 +1,152 @@
+/* pages/profile/profile.wxss */
+.profile-container {
+  min-height: 100vh;
+  padding-bottom: 120rpx;
+  background-color: #f8f9fa;
+}
+
+.user-card {
+  background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+  padding: 48rpx 32rpx;
+  display: flex;
+  align-items: center;
+  gap: 32rpx;
+}
+
+.user-avatar {
+  width: 120rpx;
+  height: 120rpx;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #ffffff;
+  border: 4rpx solid rgba(255, 255, 255, 0.3);
+}
+
+.user-avatar image {
+  width: 100%;
+  height: 100%;
+}
+
+.user-info {
+  flex: 1;
+  color: #ffffff;
+}
+
+.user-name {
+  font-size: 40rpx;
+  font-weight: bold;
+  margin-bottom: 8rpx;
+}
+
+.user-role {
+  font-size: 28rpx;
+  opacity: 0.9;
+}
+
+.section {
+  margin-top: 24rpx;
+  padding: 0 32rpx;
+}
+
+.section-title {
+  font-size: 32rpx;
+  font-weight: bold;
+  color: #111827;
+  margin-bottom: 16rpx;
+  padding-left: 8rpx;
+}
+
+.info-card {
+  background: #ffffff;
+  border-radius: 16rpx;
+  padding: 24rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.04);
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20rpx 0;
+  border-bottom: 2rpx solid #f3f4f6;
+}
+
+.info-row:last-child {
+  border-bottom: none;
+}
+
+.info-label {
+  font-size: 28rpx;
+  color: #6b7280;
+}
+
+.info-value {
+  font-size: 28rpx;
+  color: #111827;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+}
+
+.link-text {
+  color: #0ea5e9;
+  font-size: 26rpx;
+}
+
+.menu-list {
+  background: #ffffff;
+  border-radius: 16rpx;
+  overflow: hidden;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.04);
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  padding: 28rpx 24rpx;
+  border-bottom: 2rpx solid #f3f4f6;
+}
+
+.menu-item:last-child {
+  border-bottom: none;
+}
+
+.menu-icon {
+  font-size: 40rpx;
+  margin-right: 24rpx;
+}
+
+.menu-text {
+  flex: 1;
+  font-size: 30rpx;
+  color: #111827;
+}
+
+.menu-value {
+  font-size: 28rpx;
+  color: #6b7280;
+}
+
+.menu-arrow {
+  font-size: 32rpx;
+  color: #9ca3af;
+}
+
+.logout-section {
+  padding: 48rpx 32rpx;
+}
+
+.btn-logout {
+  background-color: #ffffff;
+  color: #ef4444;
+  border: 2rpx solid #ef4444;
+  border-radius: 12rpx;
+  padding: 24rpx;
+  font-size: 32rpx;
+  font-weight: bold;
+}
+
+.btn-logout:active {
+  background-color: #fef2f2;
+}

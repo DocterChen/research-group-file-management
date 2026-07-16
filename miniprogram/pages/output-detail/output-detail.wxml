@@ -1,0 +1,100 @@
+<!-- pages/output-detail/output-detail.wxml -->
+<view class="detail-container">
+  <view wx:if="{{loading}}" class="loading-container">
+    <text>加载中...</text>
+  </view>
+
+  <view wx:elif="{{!output}}" class="empty-state">
+    <view class="empty-icon">❌</view>
+    <view class="empty-text">成果不存在</view>
+  </view>
+
+  <view wx:else>
+    <!-- 头部信息 -->
+    <view class="detail-header">
+      <view class="header-title">{{output.title}}</view>
+      <view class="header-meta">
+        <view class="tag {{getStatusClass(output.review_status)}}">
+          {{formatReviewStatus(output.review_status)}}
+        </view>
+        <view class="meta-text">{{formatOutputType(output.output_type)}}</view>
+      </view>
+    </view>
+
+    <!-- 基本信息 -->
+    <view class="detail-section">
+      <view class="section-title">基本信息</view>
+      <view class="info-grid">
+        <view class="info-item">
+          <view class="info-label">成果ID</view>
+          <view class="info-value">{{output.output_id}}</view>
+        </view>
+        <view class="info-item">
+          <view class="info-label">类型</view>
+          <view class="info-value">{{formatOutputType(output.output_type)}}</view>
+        </view>
+        <view class="info-item">
+          <view class="info-label">创建时间</view>
+          <view class="info-value">{{formatDateTime(output.created_at)}}</view>
+        </view>
+        <view class="info-item">
+          <view class="info-label">更新时间</view>
+          <view class="info-value">{{formatDateTime(output.updated_at)}}</view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 作者信息 -->
+    <view wx:if="{{output.authors && output.authors.length > 0}}" class="detail-section">
+      <view class="section-title">作者</view>
+      <view class="authors-list">
+        <view wx:for="{{output.authors}}" wx:key="index" class="author-item">
+          <text class="author-index">{{index + 1}}.</text>
+          <text class="author-name">{{item}}</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- 论文专属信息 -->
+    <view wx:if="{{output.output_type === 'article' && output.metadata}}" class="detail-section">
+      <view class="section-title">论文信息</view>
+      <view class="info-grid">
+        <view wx:if="{{output.metadata.journal}}" class="info-item full-width">
+          <view class="info-label">期刊</view>
+          <view class="info-value">{{output.metadata.journal}}</view>
+        </view>
+        <view wx:if="{{output.metadata.doi}}" class="info-item full-width">
+          <view class="info-label">DOI</view>
+          <view class="info-value">{{output.metadata.doi}}</view>
+        </view>
+        <view wx:if="{{output.metadata.publication_year}}" class="info-item">
+          <view class="info-label">发表年份</view>
+          <view class="info-value">{{output.metadata.publication_year}}</view>
+        </view>
+        <view wx:if="{{output.metadata.impact_factor}}" class="info-item">
+          <view class="info-label">影响因子</view>
+          <view class="info-value">{{output.metadata.impact_factor}}</view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 操作按钮 -->
+    <view class="action-section">
+      <!-- 提交审核按钮（草稿或已退回状态） -->
+      <button wx:if="{{canEdit}}" class="btn-primary" bindtap="handleSubmit">
+        提交审核
+      </button>
+
+      <!-- 审核按钮（管理员，待审核状态） -->
+      <view wx:if="{{canReview}}" class="review-actions">
+        <button class="btn-success" bindtap="handleApprove">通过</button>
+        <button class="btn-warning" bindtap="handleReturn">退回</button>
+      </view>
+
+      <!-- 删除按钮（草稿状态） -->
+      <button wx:if="{{output.review_status === 'draft'}}" class="btn-danger" bindtap="handleDelete">
+        删除
+      </button>
+    </view>
+  </view>
+</view>
